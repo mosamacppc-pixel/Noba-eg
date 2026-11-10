@@ -42,24 +42,48 @@ class CartStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _do(Future<Map<String, dynamic>> Function() f) async {
+  bool _stale(Object e) {
+    final m = '$e'.toLowerCase();
+    return m.contains('cart') || m.contains('not found') || m.contains('expired') || m.contains('invalid');
+  }
+
+  Future<void> _save() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString('cart_id', cart!['id'] as String);
+  }
+
+  Future<void> _do(Future<Map<String, dynamic>> Function() f, {Future<Map<String, dynamic>> Function()? retry}) async {
     busy = true;
     error = null;
     notifyListeners();
     try {
       cart = await f();
-      final p = await SharedPreferences.getInstance();
-      await p.setString('cart_id', cart!['id'] as String);
+      await _save();
     } catch (e) {
-      error = '$e';
+      if (cart != null && _stale(e)) {
+        // the saved cart is finished/expired (e.g. after an order): start fresh
+        try {
+          if (retry != null) {
+            cart = null;
+            cart = await retry();
+            await _save();
+          } else {
+            await reset();
+          }
+        } catch (e2) {
+          error = '$e2';
+        }
+      } else {
+        error = '$e';
+      }
     }
     busy = false;
     notifyListeners();
   }
 
-  Future<void> add(String variantId, [int q = 1]) => _do(() => cart == null
-      ? Shopify.cartCreate(variantId, q)
-      : Shopify.cartAdd(cart!['id'], variantId, q));
+  Future<void> add(String variantId, [int q = 1]) => _do(
+      () => cart == null ? Shopify.cartCreate(variantId, q) : Shopify.cartAdd(cart!['id'], variantId, q),
+      retry: () => Shopify.cartCreate(variantId, q));
   Future<void> setQty(String lineId, int q) => _do(() => q <= 0
       ? Shopify.cartRemove(cart!['id'], lineId)
       : Shopify.cartSetQty(cart!['id'], lineId, q));

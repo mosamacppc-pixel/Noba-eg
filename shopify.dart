@@ -89,7 +89,8 @@ class Shopify {
 
   static Future<Map<String, dynamic>> _cartMut(String field, String decl, String args, Map<String, dynamic> v) async {
     final d = await _raw('mutation($decl,\$lang:LanguageCode!) @inContext(language:\$lang,country:EG){$field($args){cart{$_c} userErrors{message}}}', v);
-    final r = d[field] as Map<String, dynamic>;
+    final r = d[field] as Map<String, dynamic>?;
+    if (r == null || r['cart'] == null) throw Exception('cart not found');
     final errs = r['userErrors'] as List;
     if (errs.isNotEmpty) throw Exception(errs.first['message']);
     return r['cart'] as Map<String, dynamic>;

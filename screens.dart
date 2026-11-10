@@ -439,7 +439,7 @@ class ProductCard extends StatelessWidget {
                             await CartStore.i.add(vars.first['id']);
                             if (context.mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                content: Text(tr(context, 'تمت الإضافة إلى السلة', 'Added to cart')),
+                                content: Text(CartStore.i.error == null ? tr(context, 'تمت الإضافة إلى السلة', 'Added to cart') : tr(context, 'تعذّرت الإضافة: ', 'Could not add: ') + '${CartStore.i.error}'),
                                 action: SnackBarAction(label: tr(context, 'عرض السلة', 'View cart'), onPressed: () => goCart(context)),
                               ));
                             }
@@ -1188,7 +1188,7 @@ class _ProductScreenState extends State<ProductScreen> {
                             await CartStore.i.add(v!['id'], qty);
                             if (context.mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                content: Text(tr(context, 'تمت الإضافة إلى السلة', 'Added to cart')),
+                                content: Text(CartStore.i.error == null ? tr(context, 'تمت الإضافة إلى السلة', 'Added to cart') : tr(context, 'تعذّرت الإضافة: ', 'Could not add: ') + '${CartStore.i.error}'),
                                 action: SnackBarAction(label: tr(context, 'عرض السلة', 'View cart'), onPressed: () => goCart(context)),
                               ));
                             }
