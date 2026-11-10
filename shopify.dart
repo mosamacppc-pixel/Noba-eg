@@ -50,6 +50,19 @@ class Shopify {
     return ProdPage(c['title'] ?? '', c['description'] ?? '', List<Map<String, dynamic>>.from(pr['nodes']), pr['pageInfo']['hasNextPage'] == true, pr['pageInfo']['endCursor']);
   }
 
+  static Future<List<Map<String, dynamic>>> related(String id) async {
+    final d = await _raw('query(\$id:ID!,\$lang:LanguageCode!) @inContext(language:\$lang,country:EG){productRecommendations(productId:\$id){$_p}}', {'id': id});
+    return List<Map<String, dynamic>>.from(d['productRecommendations'] ?? []);
+  }
+
+  static Future<List<Map<String, dynamic>>> sameCollection(String handle) async {
+    final d = await _raw('query(\$h:String!,\$lang:LanguageCode!) @inContext(language:\$lang,country:EG){product(handle:\$h){collections(first:1){nodes{handle}}}}', {'h': handle});
+    final n = d['product']?['collections']?['nodes'] as List?;
+    if (n == null || n.isEmpty) return [];
+    final p = await collectionPage(n.first['handle'], n: 12);
+    return p.nodes.where((e) => e['handle'] != handle).toList();
+  }
+
   static Future<List<Map<String, dynamic>>> search(String q) async {
     final d = await _raw('query(\$s:String!,\$lang:LanguageCode!) @inContext(language:\$lang,country:EG){products(first:40,query:\$s){nodes{$_p}}}', {'s': q});
     return List<Map<String, dynamic>>.from(d['products']['nodes']);

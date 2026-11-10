@@ -31,13 +31,13 @@ Widget img(String? url, {BoxFit fit = BoxFit.cover, int w = 600}) {
   return Image.network(cdn(url, w), width: double.infinity, height: double.infinity, fit: fit, errorBuilder: (_, __, ___) => ph, loadingBuilder: (c, child, p) => p == null ? child : Container(color: soft));
 }
 
-Future<void> openWhatsApp() => launchUrl(
-    Uri.parse('https://wa.me/${Config.whatsapp}?text=${Uri.encodeComponent('مرحبا، أريد الاستفسار عن منتجات نوبا')}'),
+Future<void> openWhatsApp([String? text]) => launchUrl(
+    Uri.parse('https://wa.me/${Config.whatsapp}?text=${Uri.encodeComponent(text ?? 'مرحبا، أريد الاستفسار عن منتجات نوبا')}'),
     mode: LaunchMode.externalApplication);
 
 void goWeb(BuildContext c, String title, String path) {
   final ar = isAr(c);
-  final url = path.startsWith('http') ? path : 'https://${Config.shopDomain}${ar && !path.startsWith('/account') ? '/ar' : ''}$path';
+  final url = path.startsWith('http') ? path : 'https://${Config.shopDomain}${!ar && !path.startsWith('/account') ? '/en' : ''}$path';
   Navigator.push(c, MaterialPageRoute(builder: (_) => WebPage(title: title, url: url)));
 }
 
@@ -53,7 +53,9 @@ Widget loading() => const Padding(padding: EdgeInsets.all(30), child: Center(chi
 
 class StorePage extends StatelessWidget {
   final Widget body;
-  const StorePage({super.key, required this.body});
+  final bool isHome;
+  final String? waText;
+  const StorePage({super.key, required this.body, this.isHome = false, this.waText});
 
   @override
   Widget build(BuildContext context) {
@@ -71,7 +73,7 @@ class StorePage extends StatelessWidget {
               height: 56,
               decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: line))),
               child: Row(children: [
-                canPop
+                (canPop && !isHome)
                     ? const BackButton()
                     : Builder(builder: (c) => IconButton(icon: const Icon(Icons.menu), onPressed: () => Scaffold.of(c).openDrawer())),
                 Expanded(
@@ -95,7 +97,10 @@ class StorePage extends StatelessWidget {
             ),
           ]),
         ),
-        body: Stack(children: [
+        body: MediaQuery.removePadding(
+          context: context,
+          removeTop: true,
+          child: Stack(children: [
           body,
           PositionedDirectional(
             end: 14,
@@ -105,7 +110,7 @@ class StorePage extends StatelessWidget {
               backgroundColor: const Color(0xFF25D366),
               foregroundColor: Colors.white,
               shape: const CircleBorder(),
-              onPressed: openWhatsApp,
+              onPressed: () => openWhatsApp(waText),
               child: const Icon(Icons.chat),
             ),
           ),
@@ -126,6 +131,7 @@ class StorePage extends StatelessWidget {
                   ),
           ),
         ]),
+        ),
       ),
     );
   }
@@ -482,37 +488,60 @@ class SectionHeader extends StatelessWidget {
       );
 }
 
-class ProductRow extends StatelessWidget {
+class ProductRow extends StatefulWidget {
   final String title, handle;
   final Future<ProdPage> future;
   final bool showDesc;
   const ProductRow({super.key, required this.title, required this.handle, required this.future, this.showDesc = false});
+  @override
+  State<ProductRow> createState() => _ProductRowState();
+}
+
+class _ProductRowState extends State<ProductRow> {
+  final ctl = ScrollController();
+  @override
+  void dispose() {
+    ctl.dispose();
+    super.dispose();
+  }
+
+  void _scroll(int dir) {
+    if (!ctl.hasClients) return;
+    final to = (ctl.offset + dir * 376).clamp(0.0, ctl.position.maxScrollExtent).toDouble();
+    ctl.animateTo(to, duration: const Duration(milliseconds: 350), curve: Curves.easeInOut);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final ar = isAr(context);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      SectionHeader(title, handle: handle),
+      SectionHeader(widget.title, handle: widget.handle),
       SizedBox(
         height: 360,
         child: FutureBuilder<ProdPage>(
-          future: future,
+          future: widget.future,
           builder: (context, s) {
             if (s.connectionState != ConnectionState.done) return loading();
             if (s.hasError) return Center(child: Text(tr(context, 'تعذّر تحميل المنتجات', 'Could not load products')));
             final l = s.data!.nodes;
-            return ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              itemCount: l.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 10),
-              itemBuilder: (_, i) => SizedBox(width: 178, child: ProductCard(p: l[i])),
-            );
+            return Stack(children: [
+              ListView.separated(
+                controller: ctl,
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                itemCount: l.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 10),
+                itemBuilder: (_, i) => SizedBox(width: 178, child: ProductCard(p: l[i])),
+              ),
+              PositionedDirectional(start: 2, top: 120, child: _arrow(ar ? Icons.chevron_right : Icons.chevron_left, () => _scroll(ar ? 1 : -1))),
+              PositionedDirectional(end: 2, top: 120, child: _arrow(ar ? Icons.chevron_left : Icons.chevron_right, () => _scroll(ar ? -1 : 1))),
+            ]);
           },
         ),
       ),
-      if (showDesc)
+      if (widget.showDesc)
         FutureBuilder<ProdPage>(
-          future: future,
+          future: widget.future,
           builder: (context, s) {
             final d = s.data?.description ?? '';
             return d.isEmpty ? const SizedBox.shrink() : Padding(padding: const EdgeInsets.fromLTRB(14, 14, 14, 0), child: ExpandText(d));
@@ -566,6 +595,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return StorePage(
+      isHome: true,
       body: RefreshIndicator(
         color: ink,
         onRefresh: () async => setState(() {
@@ -646,13 +676,22 @@ class _HomeScreenState extends State<HomeScreen> {
           SectionHeader(tr(context, 'ما نقدمه فى NOBA', 'What we offer at NOBA')),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            child: Column(children: [
               for (final f in [
-                (Icons.verified_outlined, tr(context, 'منتجات أصلية', 'Original products')),
-                (Icons.local_shipping_outlined, tr(context, 'شحن سريع', 'Fast shipping')),
-                (Icons.support_agent, tr(context, 'خدمة ما بعد البيع', 'After-sales service')),
+                ('https://nobaeg.com/cdn/shop/files/Original_Products.png?v=1756678158', tr(context, 'منتجات أصلية', 'Original products'), tr(context, 'نحن ملتزمون بتقديم منتجات أصلية 100% من منتجات العناية بالبشرة المتميزة إلى مستحضرات التجميل الخالدة والعناية الذاتية الأساسية، كل منها مصمم لتعزيز الجمال الطبيعي وإلهام الثقة.', 'We are committed to 100% original products, from premium skin care to timeless makeup and essential self-care, each designed to enhance natural beauty and inspire confidence.')),
+                ('https://nobaeg.com/cdn/shop/files/Fast_Shipping.jpg?v=1756678211', tr(context, 'شحن سريع', 'Fast shipping'), tr(context, 'مع الشحن السريع والموثوق، تضمن NOBA وصول مستحضرات التجميل الأساسية إليك بسرعة وأمان، حتى تتمكني من الاستمتاع بالأناقة دون تأخير.', 'With fast and reliable shipping, NOBA gets your beauty essentials to you quickly and safely, so you can enjoy elegance without delay.')),
+                ('https://nobaeg.com/cdn/shop/files/After_Sales_247.png?v=1756678252', tr(context, 'خدمة ما بعد البيع', 'After-sales service'), tr(context, 'لأن رضاكم مهم، فإن فريق دعم ما بعد البيع لدينا متاح على مدار الساعة طوال أيام الأسبوع لمساعدتك وإرشادك وضمان حصولك على تجربة خالية من العيوب.', 'Because your satisfaction matters, our after-sales support team is available 24/7 to help and guide you.')),
               ])
-                Expanded(child: Column(children: [Icon(f.$1, size: 38), const SizedBox(height: 8), Text(f.$2, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w600))])),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 22),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    AspectRatio(aspectRatio: 1.5, child: img(f.$1, w: 800)),
+                    const SizedBox(height: 10),
+                    Text(f.$2, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 4),
+                    Text(f.$3, style: const TextStyle(color: Colors.black54, height: 1.6)),
+                  ]),
+                ),
             ]),
           ),
           SectionHeader(tr(context, 'يقول العملاء عنا', 'What customers say')),
@@ -691,42 +730,62 @@ class Slideshow extends StatefulWidget {
 }
 
 class _SlideshowState extends State<Slideshow> {
+  final pc = PageController();
   int i = 0;
   Timer? t;
   @override
   void initState() {
     super.initState();
-    t = Timer.periodic(const Duration(seconds: 5), (_) => setState(() => i = (i + 1) % slideUrls.length));
+    t = Timer.periodic(const Duration(seconds: 5), (_) => _go((i + 1) % slideUrls.length));
+  }
+
+  void _go(int n) {
+    if (pc.hasClients) pc.animateToPage(n, duration: const Duration(milliseconds: 450), curve: Curves.easeInOut);
   }
 
   @override
   void dispose() {
     t?.cancel();
+    pc.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Stack(children: [
-      AnimatedSwitcher(
-        duration: const Duration(milliseconds: 500),
-        child: Image.network(cdn(slideUrls[i], 1000), key: ValueKey(i), width: double.infinity, fit: BoxFit.fitWidth, errorBuilder: (_, __, ___) => const SizedBox(height: 200), loadingBuilder: (c, child, p) => p == null ? child : const SizedBox(height: 200)),
-      ),
-      Positioned(
-        left: 0,
-        right: 0,
-        bottom: 8,
-        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          for (var n = 0; n < slideUrls.length; n++)
-            GestureDetector(
-              onTap: () => setState(() => i = n),
-              child: Container(margin: const EdgeInsets.all(3), width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: n == i ? ink : Colors.white70, border: Border.all(color: ink, width: .5))),
-            ),
-        ]),
-      ),
-    ]);
+    final ar = isAr(context);
+    return AspectRatio(
+      aspectRatio: 1.24,
+      child: Stack(children: [
+        PageView.builder(
+          controller: pc,
+          itemCount: slideUrls.length,
+          onPageChanged: (n) => setState(() => i = n),
+          itemBuilder: (_, n) => img(slideUrls[n], w: 1000),
+        ),
+        PositionedDirectional(start: 4, top: 0, bottom: 0, child: Center(child: _arrow(ar ? Icons.chevron_right : Icons.chevron_left, () => _go((i - 1 + slideUrls.length) % slideUrls.length)))),
+        PositionedDirectional(end: 4, top: 0, bottom: 0, child: Center(child: _arrow(ar ? Icons.chevron_left : Icons.chevron_right, () => _go((i + 1) % slideUrls.length)))),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 8,
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            for (var n = 0; n < slideUrls.length; n++)
+              GestureDetector(
+                onTap: () => _go(n),
+                child: Container(margin: const EdgeInsets.all(3), width: 9, height: 9, decoration: BoxDecoration(shape: BoxShape.circle, color: n == i ? ink : Colors.white70, border: Border.all(color: Colors.white, width: .5))),
+              ),
+          ]),
+        ),
+      ]),
+    );
   }
 }
+
+Widget _arrow(IconData ic, VoidCallback f) => Material(
+      color: Colors.white70,
+      shape: const CircleBorder(),
+      child: InkWell(customBorder: const CircleBorder(), onTap: f, child: Padding(padding: const EdgeInsets.all(4), child: Icon(ic, color: ink))),
+    );
 
 class Footer extends StatelessWidget {
   const Footer({super.key});
@@ -902,6 +961,56 @@ class _SearchScreenState extends State<SearchScreen> {
 
 // ───────────────────────── product ─────────────────────────
 
+class ProductStrip extends StatefulWidget {
+  final Future<List<Map<String, dynamic>>> future;
+  const ProductStrip({super.key, required this.future});
+  @override
+  State<ProductStrip> createState() => _ProductStripState();
+}
+
+class _ProductStripState extends State<ProductStrip> {
+  final ctl = ScrollController();
+  @override
+  void dispose() {
+    ctl.dispose();
+    super.dispose();
+  }
+
+  void _scroll(int dir) {
+    if (!ctl.hasClients) return;
+    final to = (ctl.offset + dir * 376).clamp(0.0, ctl.position.maxScrollExtent).toDouble();
+    ctl.animateTo(to, duration: const Duration(milliseconds: 350), curve: Curves.easeInOut);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ar = isAr(context);
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: widget.future,
+      builder: (context, s) {
+        if (s.connectionState != ConnectionState.done) return const SizedBox(height: 120, child: Center(child: CircularProgressIndicator(color: ink, strokeWidth: 2)));
+        final l = s.data ?? [];
+        if (l.isEmpty) return const SizedBox.shrink();
+        return SizedBox(
+          height: 360,
+          child: Stack(children: [
+            ListView.separated(
+              controller: ctl,
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              itemCount: l.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 10),
+              itemBuilder: (_, i) => SizedBox(width: 178, child: ProductCard(p: l[i])),
+            ),
+            PositionedDirectional(start: 2, top: 120, child: _arrow(ar ? Icons.chevron_right : Icons.chevron_left, () => _scroll(ar ? 1 : -1))),
+            PositionedDirectional(end: 2, top: 120, child: _arrow(ar ? Icons.chevron_left : Icons.chevron_right, () => _scroll(ar ? -1 : 1))),
+          ]),
+        );
+      },
+    );
+  }
+}
+
 class ProductScreen extends StatefulWidget {
   final Map<String, dynamic> p;
   const ProductScreen({super.key, required this.p});
@@ -911,10 +1020,14 @@ class ProductScreen extends StatefulWidget {
 
 class _ProductScreenState extends State<ProductScreen> {
   late List<String> sel;
+  final pc = PageController();
   int qty = 1, page = 0;
+  late final Future<List<Map<String, dynamic>>> recs = Shopify.related(widget.p['id']);
+  late final Future<List<Map<String, dynamic>>> same = Shopify.sameCollection(widget.p['handle']);
 
   List get vars => widget.p['variants']['nodes'] as List;
   List get opts => widget.p['options'] as List;
+  String get url => 'https://${Config.shopDomain}/products/${widget.p['handle']}';
 
   @override
   void initState() {
@@ -922,6 +1035,12 @@ class _ProductScreenState extends State<ProductScreen> {
     final first = vars.firstWhere((v) => v['availableForSale'] == true, orElse: () => vars.first);
     sel = (first['title'] as String).split(' / ');
     _fix();
+  }
+
+  @override
+  void dispose() {
+    pc.dispose();
+    super.dispose();
   }
 
   void _fix() {
@@ -936,72 +1055,126 @@ class _ProductScreenState extends State<ProductScreen> {
     return null;
   }
 
+  bool _valueAvailable(int oi, String val) {
+    for (final v in vars) {
+      final parts = (v['title'] as String).split(' / ');
+      if (parts.length == opts.length && parts[oi] == val && v['availableForSale'] == true) return true;
+    }
+    return false;
+  }
+
+  int _inCart(String? variantId) {
+    var n = 0;
+    for (final l in CartStore.i.lines) {
+      if (l['merchandise']['id'] == variantId) n += (l['quantity'] as int);
+    }
+    return n;
+  }
+
+  void _zoom(List<String> imgs, int start) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog.fullscreen(
+        backgroundColor: Colors.black,
+        child: Stack(children: [
+          PageView(controller: PageController(initialPage: start), children: [for (final u in imgs) InteractiveViewer(child: Center(child: Image.network(cdn(u, 1400), fit: BoxFit.contain)))]),
+          SafeArea(child: IconButton(icon: const Icon(Icons.close, color: Colors.white), onPressed: () => Navigator.pop(ctx))),
+        ]),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = widget.p;
     final ar = isAr(context);
     final v = cur;
     final imgs = (p['images']['nodes'] as List).map((e) => e['url'] as String).toList();
+    if (imgs.isEmpty && p['featuredImage']?['url'] != null) imgs.add(p['featuredImage']['url'] as String);
     final price = money(v?['price']?['amount'] ?? p['priceRange']['minVariantPrice']['amount']);
     final cmp = money(v?['compareAtPrice']?['amount']);
     final ok = v != null && v['availableForSale'] == true;
     final vendor = (p['vendor'] ?? '') as String;
+    final title = p['title'] as String;
+
+    Widget heading(String t) => Padding(padding: const EdgeInsets.fromLTRB(16, 26, 16, 12), child: Text(t, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)));
+
     return StorePage(
+      waText: 'مرحباً نوبا، عندي استفسار عن المنتج: $title $url',
       body: ListView(padding: const EdgeInsets.only(bottom: 100), children: [
         SizedBox(
           height: 380,
           child: Stack(children: [
-            PageView(onPageChanged: (i) => setState(() => page = i), children: [for (final u in imgs.isEmpty ? [p['featuredImage']?['url']] : imgs) img(u as String?, fit: BoxFit.contain, w: 900)]),
+            PageView(controller: pc, onPageChanged: (i) => setState(() => page = i), children: [
+              for (var i = 0; i < imgs.length; i++) GestureDetector(onTap: () => _zoom(imgs, i), child: img(imgs[i], fit: BoxFit.contain, w: 900)),
+              if (imgs.isEmpty) img(null),
+            ]),
             if (imgs.length > 1)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 6,
-                child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [for (var i = 0; i < imgs.length; i++) Container(margin: const EdgeInsets.all(3), width: 7, height: 7, decoration: BoxDecoration(shape: BoxShape.circle, color: i == page ? ink : Colors.black26))]),
-              ),
+              PositionedDirectional(end: 10, bottom: 10, child: Container(color: Colors.black54, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), child: Text('${page + 1} / ${imgs.length}', style: const TextStyle(color: Colors.white, fontSize: 12)))),
           ]),
         ),
+        if (imgs.length > 1)
+          SizedBox(
+            height: 70,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              itemCount: imgs.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (_, i) => GestureDetector(
+                onTap: () => pc.animateToPage(i, duration: const Duration(milliseconds: 250), curve: Curves.easeInOut),
+                child: Container(width: 58, decoration: BoxDecoration(border: Border.all(color: i == page ? ink : line, width: i == page ? 1.5 : 1)), child: img(imgs[i], w: 200)),
+              ),
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.all(16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (vendor.isNotEmpty) Text(vendor, style: const TextStyle(color: Colors.black54)),
+            if (vendor.isNotEmpty) Text(tr(context, 'بواسطة $vendor', 'By $vendor'), style: const TextStyle(color: Colors.black54)),
             const SizedBox(height: 4),
-            Text(p['title'], style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, height: 1.3)),
+            Text(title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, height: 1.3)),
             const SizedBox(height: 10),
             Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 10, children: [
               Text(egp(price, ar), textDirection: TextDirection.ltr, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: cmp > price ? const Color(0xFFB3261E) : ink)),
               if (cmp > price) Text(egp(cmp, ar), textDirection: TextDirection.ltr, style: const TextStyle(color: Colors.black45, decoration: TextDecoration.lineThrough)),
-              if (cmp > price) Container(color: ink, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), child: Text(tr(context, 'خصم', 'Sale'), style: const TextStyle(color: Colors.white, fontSize: 12))),
+              if (cmp > price && ok) Container(color: ink, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), child: Text(tr(context, 'خصم', 'Sale'), style: const TextStyle(color: Colors.white, fontSize: 12))),
+              if (!ok) Container(color: Colors.black87, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), child: Text(tr(context, 'نفذ', 'Sold out'), style: const TextStyle(color: Colors.white, fontSize: 12))),
             ]),
+            const SizedBox(height: 6),
+            Text(tr(context, 'يتم احتساب الشحن عند الخروج.', 'Shipping calculated at checkout.'), style: const TextStyle(color: Colors.black54, fontSize: 12.5)),
             if (vars.length > 1)
               for (var oi = 0; oi < opts.length; oi++) ...[
                 const SizedBox(height: 16),
-                Text(opts[oi]['name'], style: const TextStyle(fontWeight: FontWeight.w600)),
+                Text('${opts[oi]['name']}:', style: const TextStyle(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 6),
                 Wrap(spacing: 8, runSpacing: 8, children: [
                   for (final val in (opts[oi]['values'] as List))
                     ChoiceChip(
-                      label: Text('$val'),
+                      label: Text('$val', style: TextStyle(color: sel[oi] == val ? Colors.white : (_valueAvailable(oi, '$val') ? ink : Colors.black38), decoration: _valueAvailable(oi, '$val') ? null : TextDecoration.lineThrough)),
                       selected: sel[oi] == val,
                       showCheckmark: false,
-                      labelStyle: TextStyle(color: sel[oi] == val ? Colors.white : ink),
                       onSelected: (_) => setState(() => sel[oi] = '$val'),
                     ),
                 ]),
               ],
             const SizedBox(height: 18),
-            Row(children: [
-              Text(tr(context, 'الكمية', 'Quantity')),
-              const Spacer(),
-              Container(
-                decoration: BoxDecoration(border: Border.all(color: line)),
-                child: Row(children: [
-                  IconButton(icon: const Icon(Icons.remove), onPressed: qty > 1 ? () => setState(() => qty--) : null),
-                  Text('$qty'),
-                  IconButton(icon: const Icon(Icons.add), onPressed: () => setState(() => qty++)),
-                ]),
-              ),
-            ]),
+            ListenableBuilder(
+              listenable: CartStore.i,
+              builder: (context, _) => Row(children: [
+                Text(tr(context, 'الكمية', 'Quantity')),
+                const SizedBox(width: 8),
+                Text('(${_inCart(v?['id'])} ${tr(context, 'في سلة التسوق', 'in cart')})', style: const TextStyle(color: Colors.black54, fontSize: 12)),
+                const Spacer(),
+                Container(
+                  decoration: BoxDecoration(border: Border.all(color: line)),
+                  child: Row(children: [
+                    IconButton(icon: const Icon(Icons.remove), onPressed: qty > 1 ? () => setState(() => qty--) : null),
+                    SizedBox(width: 28, child: Text('$qty', textAlign: TextAlign.center)),
+                    IconButton(icon: const Icon(Icons.add), onPressed: () => setState(() => qty++)),
+                  ]),
+                ),
+              ]),
+            ),
             const SizedBox(height: 14),
             ListenableBuilder(
               listenable: CartStore.i,
@@ -1032,16 +1205,83 @@ class _ProductScreenState extends State<ProductScreen> {
                         : () async {
                             await CartStore.i.add(v!['id'], qty);
                             final u = CartStore.i.checkoutUrl;
-                            if (u != null && context.mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => WebPage(title: tr(context, 'إتمام الطلب', 'Checkout'), url: u)));
+                            if (u != null && context.mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => WebPage(title: tr(context, 'إتمام الطلب', 'Checkout'), url: u, checkout: true)));
                           },
-                    child: Text(tr(context, 'اشتر الآن', 'Buy it now')),
+                    child: Text(tr(context, 'شراء الآن', 'Buy it now')),
                   ),
                 ),
               ]),
             ),
             const SizedBox(height: 20),
-            if ('${p['description']}'.isNotEmpty) ExpandText('${p['description']}'),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(color: soft, border: Border.all(color: line)),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(tr(context, 'عروض نوبا لك', 'NOBA offers for you'), style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                Text(tr(context, '🎁 افتح بوكس هدايا في الصفحة الرئيسية لتربح خصماً أو شحناً مجانياً.', '🎁 Open a gift box on the home page to win a discount or free shipping.'), style: const TextStyle(height: 1.5)),
+                InkWell(onTap: () => Navigator.popUntil(context, (r) => r.isFirst), child: Text(tr(context, 'الصفحة الرئيسية', 'Home page'), style: const TextStyle(decoration: TextDecoration.underline))),
+                const SizedBox(height: 8),
+                Text(tr(context, '🚚 هدية الشحن المجاني للطلبات من 1000 جنيه فأكثر', '🚚 Free shipping gift on orders of 1000 EGP or more'), style: const TextStyle(height: 1.5)),
+                const SizedBox(height: 8),
+                Text(tr(context, '🌿 عروض الجمعة الخضراء', '🌿 Green Friday offers')),
+                InkWell(onTap: () => goCollection(context, 'green-friday'), child: Text(tr(context, 'شاهد كل العروض', 'See all offers'), style: const TextStyle(decoration: TextDecoration.underline))),
+              ]),
+            ),
           ]),
+        ),
+        heading(tr(context, 'منتجات تناسب هذا المنتج', 'Products that go with this')),
+        ProductStrip(future: recs),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 22, 16, 0),
+          child: Wrap(runSpacing: 14, children: [
+            for (final t in [
+              (Icons.verified_outlined, tr(context, 'منتج أصلي 100%', '100% original'), tr(context, 'مباشرة من نوبا', 'Direct from NOBA')),
+              (Icons.assignment_return_outlined, tr(context, 'إرجاع سهل', 'Easy returns'), tr(context, 'للمنتج التالف أو الخاطئ', 'For damaged or wrong items')),
+              (Icons.local_shipping_outlined, tr(context, 'شحن سريع', 'Fast shipping'), tr(context, 'القاهرة والجيزة: 1–3 أيام عمل', 'Cairo & Giza: 1–3 business days')),
+              (Icons.local_offer_outlined, tr(context, 'عروض مميزة', 'Special offers'), tr(context, 'خصومات على منتجات مختارة', 'Discounts on selected products')),
+              (Icons.support_agent, tr(context, 'خدمة ما بعد البيع', 'After-sales service'), tr(context, 'عبر واتساب أو البريد', 'Via WhatsApp or email')),
+              (Icons.lock_outline, tr(context, 'شراء آمن', 'Secure checkout'), tr(context, 'دفع وبيانات محمية', 'Protected payment & data')),
+            ])
+              FractionallySizedBox(
+                widthFactor: .5,
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(t.$1, size: 26),
+                  const SizedBox(width: 8),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(t.$2, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)), Text(t.$3, style: const TextStyle(color: Colors.black54, fontSize: 11.5))])),
+                ]),
+              ),
+          ]),
+        ),
+        if ('${p['description']}'.isNotEmpty) Padding(padding: const EdgeInsets.fromLTRB(16, 24, 16, 0), child: ExpandText('${p['description']}')),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Row(children: [
+            TextButton.icon(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: url));
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'تم نسخ الرابط', 'Link copied'))));
+              },
+              icon: const Icon(Icons.share_outlined, color: ink),
+              label: Text(tr(context, 'شارك', 'Share'), style: const TextStyle(color: ink)),
+            ),
+            TextButton.icon(
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => WebPage(title: title, url: url))),
+              icon: const Icon(Icons.open_in_new, color: ink),
+              label: Text(tr(context, 'عرض التفاصيل الكاملة', 'View full details'), style: const TextStyle(color: ink)),
+            ),
+          ]),
+        ),
+        heading(tr(context, 'قد يعجبك أيضاً', 'You may also like')),
+        ProductStrip(future: same),
+        heading(tr(context, 'مراجعات العملاء', 'Customer reviews')),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: OutlinedButton(
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => WebPage(title: tr(context, 'المراجعات', 'Reviews'), url: '$url#judgeme_product_reviews'))),
+            child: Text(tr(context, 'عرض المراجعات / كتابة مراجعة', 'View reviews / Write a review')),
+          ),
         ),
       ]),
     );
@@ -1126,7 +1366,7 @@ class CartScreen extends StatelessWidget {
               width: double.infinity,
               child: FilledButton(
                 style: FilledButton.styleFrom(minimumSize: const Size(0, 52)),
-                onPressed: c.checkoutUrl == null ? null : () => Navigator.push(context, MaterialPageRoute(builder: (_) => WebPage(title: tr(context, 'إتمام الطلب', 'Checkout'), url: c.checkoutUrl!))),
+                onPressed: c.checkoutUrl == null ? null : () => Navigator.push(context, MaterialPageRoute(builder: (_) => WebPage(title: tr(context, 'إتمام الطلب', 'Checkout'), url: c.checkoutUrl!, checkout: true))),
                 child: Text(tr(context, 'إتمام الطلب', 'Check out')),
               ),
             ),
@@ -1163,24 +1403,58 @@ class CartScreen extends StatelessWidget {
 
 class WebPage extends StatefulWidget {
   final String title, url;
-  const WebPage({super.key, required this.title, required this.url});
+  final bool checkout;
+  const WebPage({super.key, required this.title, required this.url, this.checkout = false});
   @override
   State<WebPage> createState() => _WebPageState();
 }
 
 class _WebPageState extends State<WebPage> {
+  bool done = false; // order completed (thank-you page seen)
+
   late final WebViewController c = WebViewController()
     ..setJavaScriptMode(JavaScriptMode.unrestricted)
-    ..setNavigationDelegate(NavigationDelegate(onNavigationRequest: (r) {
-      final u = Uri.tryParse(r.url);
-      final ext = u != null && (u.scheme == 'tel' || u.scheme == 'mailto' || ['wa.me', 'api.whatsapp.com', 'www.facebook.com', 'www.instagram.com', 'www.tiktok.com'].contains(u.host));
-      if (ext) {
-        launchUrl(u, mode: LaunchMode.externalApplication);
-        return NavigationDecision.prevent;
-      }
-      return NavigationDecision.navigate;
-    }))
+    ..setNavigationDelegate(NavigationDelegate(
+      onPageStarted: (url) {
+        if (url.contains('thank_you') || url.contains('/orders/')) done = true;
+      },
+      onNavigationRequest: (r) {
+        final u = Uri.tryParse(r.url);
+        if (u == null) return NavigationDecision.prevent;
+        // block dangerous schemes (intent:, file:, javascript:, ...)
+        if (!['http', 'https', 'about', 'tel', 'mailto'].contains(u.scheme)) return NavigationDecision.prevent;
+        // non-checkout pages: stay on the store (+ Shopify / review widgets); anything else opens outside the app
+        if (!widget.checkout && u.scheme.startsWith('http')) {
+          final h = u.host;
+          final trusted = h == Config.shopDomain || h.endsWith('.${Config.shopDomain}') || h.endsWith('shopify.com') || h.endsWith('shopifycs.com') || h.endsWith('shop.app') || h.endsWith('judge.me');
+          final social = ['wa.me', 'api.whatsapp.com', 'www.facebook.com', 'www.instagram.com', 'www.tiktok.com'].contains(h);
+          if (!trusted && !social) {
+            launchUrl(u, mode: LaunchMode.externalApplication);
+            return NavigationDecision.prevent;
+          }
+        }
+        final ext = u.scheme == 'tel' || u.scheme == 'mailto' || ['wa.me', 'api.whatsapp.com', 'www.facebook.com', 'www.instagram.com', 'www.tiktok.com'].contains(u.host);
+        if (ext) {
+          launchUrl(u, mode: LaunchMode.externalApplication);
+          return NavigationDecision.prevent;
+        }
+        // "Continue shopping" on the checkout / thank-you page -> back into the app
+        if (widget.checkout && (u.host == Config.shopDomain || u.host == 'www.${Config.shopDomain}')) {
+          final p = u.path;
+          final leave = p.isEmpty || p == '/' || p == '/en' || p == '/en/' || p.startsWith('/collections') || p.startsWith('/products') || p.startsWith('/pages');
+          if (leave) {
+            if (done) CartStore.i.reset();
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) Navigator.popUntil(context, (r) => r.isFirst);
+            });
+            return NavigationDecision.prevent;
+          }
+        }
+        return NavigationDecision.navigate;
+      },
+    ))
     ..loadRequest(Uri.parse(widget.url));
+
   @override
   Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: Text(widget.title, style: const TextStyle(fontSize: 16))), body: WebViewWidget(controller: c));
 }

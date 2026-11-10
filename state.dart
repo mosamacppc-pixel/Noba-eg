@@ -34,6 +34,14 @@ class CartStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> reset() async {
+    cart = null;
+    try {
+      (await SharedPreferences.getInstance()).remove('cart_id');
+    } catch (_) {}
+    notifyListeners();
+  }
+
   Future<void> _do(Future<Map<String, dynamic>> Function() f) async {
     busy = true;
     error = null;
