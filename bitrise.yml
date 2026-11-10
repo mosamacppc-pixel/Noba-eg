@@ -1,0 +1,22 @@
+format_version: '11'
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+project_type: flutter
+workflows:
+  android-apk:
+    summary: Build an installable Android APK for testing
+    steps:
+    - activate-ssh-key@4: {}
+    - git-clone@8: {}
+    - flutter-installer@0:
+        inputs:
+        - version: stable
+    - script@1:
+        title: Create platform folders and build
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -ex
+            ./setup.sh
+            flutter build apk --release
+            cp build/app/outputs/flutter-apk/app-release.apk "$BITRISE_DEPLOY_DIR/noba-app.apk"
+    - deploy-to-bitrise-io@2: {}
