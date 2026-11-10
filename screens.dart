@@ -1,5 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'config.dart';
@@ -7,61 +10,239 @@ import 'shopify.dart';
 import 'state.dart';
 import 'util.dart';
 
-Widget img(String? url, {double? h, BoxFit fit = BoxFit.cover}) => url == null
-    ? Container(height: h, color: const Color(0xFFE6F3ED), child: const Icon(Icons.spa, color: green))
-    : Image.network(url, height: h, width: double.infinity, fit: fit,
-        errorBuilder: (_, __, ___) => Container(height: h, color: const Color(0xFFE6F3ED)));
+// ───────────────────────── helpers ─────────────────────────
 
-Future<void> openWhatsApp() => launchUrl(Uri.parse('https://wa.me/${Config.whatsapp}'), mode: LaunchMode.externalApplication);
+const logoUrl = 'https://nobaeg.com/cdn/shop/files/main_logo_2-01.png?v=1756291803';
+const slideUrls = [
+  'https://nobaeg.com/cdn/shop/files/318014.jpg?v=1793815764',
+  'https://nobaeg.com/cdn/shop/files/318022.jpg?v=1793816135',
+  'https://nobaeg.com/cdn/shop/files/318023.jpg?v=1793816278',
+];
+const catHandles = ['skin-care', 'hair-care', 'makeup', 'fragrance', 'personal-care', 'nail-care', 'men-care', 'kids-care-zone'];
+const homeCatHandles = ['hair-care', 'kids-care-zone', 'nail-care', 'makeup', 'men-care', 'skin-care', 'fragrance'];
+const brandHandles = ['beesline', 'bio-soft', 'capixy', 'clary', 'cybele', 'eva', 'hepta', 'johnson', 'karseell', 'note', 'palette-1', 'perla-pink', 'rose-gold', 'seropipe', 'tresemme', 'twist-go', 'vaseline', 'zak', 'rushbrush'];
+const menuBrandHandles = ['cybele', 'vatika', 'bio-soft', 'sunsilk', 'dove', 'l-oreal-paris', 'eva', 'dodge', 'sandra', 'note'];
 
-class Shell extends StatefulWidget {
-  const Shell({super.key});
-  @override
-  State<Shell> createState() => _ShellState();
+String cdn(String url, int w) => url.contains('?') ? '$url&width=$w' : '$url?width=$w';
+
+Widget img(String? url, {BoxFit fit = BoxFit.cover, int w = 600}) {
+  final ph = Container(color: soft, child: const Center(child: Icon(Icons.spa_outlined, color: Colors.black26)));
+  if (url == null) return ph;
+  return Image.network(cdn(url, w), width: double.infinity, height: double.infinity, fit: fit, errorBuilder: (_, __, ___) => ph, loadingBuilder: (c, child, p) => p == null ? child : Container(color: soft));
 }
 
-class _ShellState extends State<Shell> {
-  int tab = 0;
+Future<void> openWhatsApp() => launchUrl(
+    Uri.parse('https://wa.me/${Config.whatsapp}?text=${Uri.encodeComponent('مرحبا، أريد الاستفسار عن منتجات نوبا')}'),
+    mode: LaunchMode.externalApplication);
+
+void goWeb(BuildContext c, String title, String path) {
+  final ar = isAr(c);
+  final url = path.startsWith('http') ? path : 'https://${Config.shopDomain}${ar && !path.startsWith('/account') ? '/ar' : ''}$path';
+  Navigator.push(c, MaterialPageRoute(builder: (_) => WebPage(title: title, url: url)));
+}
+
+void goCollection(BuildContext c, String handle, [String? title]) =>
+    Navigator.push(c, MaterialPageRoute(builder: (_) => CollectionScreen(handle: handle, title: title)));
+void goProduct(BuildContext c, Map<String, dynamic> p) => Navigator.push(c, MaterialPageRoute(builder: (_) => ProductScreen(p: p)));
+void goCart(BuildContext c) => Navigator.push(c, MaterialPageRoute(builder: (_) => const CartScreen()));
+void goSearch(BuildContext c) => Navigator.push(c, MaterialPageRoute(builder: (_) => const SearchScreen()));
+
+Widget loading() => const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator(color: ink, strokeWidth: 2)));
+
+// ───────────────────────── page frame (announcement bar + header + drawer) ─────────────────────────
+
+class StorePage extends StatelessWidget {
+  final Widget body;
+  const StorePage({super.key, required this.body});
 
   @override
   Widget build(BuildContext context) {
-    final pages = [HomeScreen(onShop: () => setState(() => tab = 1)), const CategoriesScreen(), const CartScreen(), const AccountScreen()];
-    return ListenableBuilder(
-      listenable: Listenable.merge([CartStore.i, GiftStore.i]),
-      builder: (context, _) {
-        final cart = CartStore.i;
-        return Scaffold(
-          body: Stack(children: [
-            IndexedStack(index: tab, children: pages),
-            if (GiftStore.i.gift != null)
-              PositionedDirectional(
-                start: 12,
-                bottom: 12,
-                child: ActionChip(
-                  backgroundColor: green,
-                  side: const BorderSide(color: gold, width: 2),
-                  label: Text(tr(context, '🎁 هديتي', '🎁 My gift'), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-                  onPressed: () => showGift(context, GiftStore.i.gift!, () => setState(() => tab = 1)),
+    final top = MediaQuery.of(context).padding.top;
+    final canPop = Navigator.canPop(context);
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light,
+      child: Scaffold(
+        drawer: const NavDrawer(),
+        appBar: PreferredSize(
+          preferredSize: Size.fromHeight(top + 34 + 56),
+          child: Column(children: [
+            Container(color: ink, padding: EdgeInsets.only(top: top), height: top + 34, child: const AnnounceBar()),
+            Container(
+              height: 56,
+              decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: line))),
+              child: Row(children: [
+                canPop
+                    ? const BackButton()
+                    : Builder(builder: (c) => IconButton(icon: const Icon(Icons.menu), onPressed: () => Scaffold.of(c).openDrawer())),
+                Expanded(
+                  child: Center(
+                    child: GestureDetector(
+                      onTap: () => Navigator.popUntil(context, (r) => r.isFirst),
+                      child: Image.network(cdn(logoUrl, 400), height: 32, errorBuilder: (_, __, ___) => const Text('NOBA', style: TextStyle(fontSize: 22, letterSpacing: 6, fontWeight: FontWeight.w700))),
+                    ),
+                  ),
                 ),
-              ),
+                IconButton(icon: const Icon(Icons.search), onPressed: () => goSearch(context)),
+                IconButton(icon: const Icon(Icons.person_outline), onPressed: () => goWeb(context, tr(context, 'حسابي', 'Account'), '/account')),
+                ListenableBuilder(
+                  listenable: CartStore.i,
+                  builder: (context, _) => IconButton(
+                    icon: Badge(isLabelVisible: CartStore.i.count > 0, label: Text('${CartStore.i.count}'), backgroundColor: ink, child: const Icon(Icons.shopping_bag_outlined)),
+                    onPressed: () => goCart(context),
+                  ),
+                ),
+              ]),
+            ),
           ]),
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: tab,
-            onDestinationSelected: (i) => setState(() => tab = i),
-            destinations: [
-              NavigationDestination(icon: const Icon(Icons.home_outlined), selectedIcon: const Icon(Icons.home), label: tr(context, 'الرئيسية', 'Home')),
-              NavigationDestination(icon: const Icon(Icons.grid_view), label: tr(context, 'الأقسام', 'Shop')),
-              NavigationDestination(
-                  icon: Badge(isLabelVisible: cart.count > 0, label: Text('${cart.count}'), child: const Icon(Icons.shopping_bag_outlined)),
-                  label: tr(context, 'السلة', 'Cart')),
-              NavigationDestination(icon: const Icon(Icons.person_outline), label: tr(context, 'حسابي', 'Account')),
-            ],
+        ),
+        body: Stack(children: [
+          body,
+          PositionedDirectional(
+            end: 14,
+            bottom: 14,
+            child: FloatingActionButton.small(
+              heroTag: null,
+              backgroundColor: const Color(0xFF25D366),
+              foregroundColor: Colors.white,
+              shape: const CircleBorder(),
+              onPressed: openWhatsApp,
+              child: const Icon(Icons.chat),
+            ),
           ),
-        );
-      },
+          ListenableBuilder(
+            listenable: GiftStore.i,
+            builder: (context, _) => GiftStore.i.gift == null
+                ? const SizedBox.shrink()
+                : PositionedDirectional(
+                    start: 14,
+                    bottom: 14,
+                    child: ActionChip(
+                      backgroundColor: green,
+                      side: const BorderSide(color: gold, width: 2),
+                      shape: const StadiumBorder(),
+                      label: Text(tr(context, '🎁 هديتي', '🎁 My gift'), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                      onPressed: () => showGift(context, GiftStore.i.gift!, () {}),
+                    ),
+                  ),
+          ),
+        ]),
+      ),
     );
   }
 }
+
+class AnnounceBar extends StatefulWidget {
+  const AnnounceBar({super.key});
+  @override
+  State<AnnounceBar> createState() => _AnnounceBarState();
+}
+
+class _AnnounceBarState extends State<AnnounceBar> {
+  int i = 0;
+  Timer? t;
+  @override
+  void initState() {
+    super.initState();
+    t = Timer.periodic(const Duration(seconds: 4), (_) => setState(() => i = (i + 1) % 3));
+  }
+
+  @override
+  void dispose() {
+    t?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final msgs = [
+      tr(context, 'احصل الآن على شحن مجاني للطلبات الأكثر من 700 جنيه مصري', 'Get free shipping on orders over 700 EGP'),
+      tr(context, 'اهلا بكم فى نوبا لمستحضرات التجميل و العناية الشخصية', 'Welcome to NOBA Cosmetics & Personal Care'),
+      tr(context, 'تسوق الآن بـ 375 جنيه واحصل على خصم إضافي 5%', 'Shop now from 375 EGP and get an extra 5% off'),
+    ];
+    return InkWell(
+      onTap: i == 2 ? () => goCollection(context, 'green-friday') : null,
+      child: Center(
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 300),
+          child: Text(msgs[i], key: ValueKey(i), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white, fontSize: 12.5, decoration: i == 2 ? TextDecoration.underline : null, decorationColor: Colors.white)),
+        ),
+      ),
+    );
+  }
+}
+
+class NavDrawer extends StatelessWidget {
+  const NavDrawer({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final ar = isAr(context);
+    final nav = Navigator.of(context);
+    void close(void Function(BuildContext) f) {
+      nav.pop();
+      f(nav.context);
+    }
+
+    return Drawer(
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(),
+      child: SafeArea(
+        child: FutureBuilder<List<Map<String, dynamic>>>(
+          future: Shopify.collectionsByHandles([...catHandles, ...menuBrandHandles]),
+          builder: (context, s) {
+            final titles = {for (final c in (s.data ?? [])) c['handle'] as String: c['title'] as String};
+            Widget sub(String h) => ListTile(
+                  dense: true,
+                  contentPadding: const EdgeInsetsDirectional.only(start: 32, end: 16),
+                  title: Text(titles[h] ?? h),
+                  onTap: () => close((c) => goCollection(c, h, titles[h])),
+                );
+            Widget item(String t, VoidCallback f) => ListTile(title: Text(t, style: const TextStyle(fontWeight: FontWeight.w600)), onTap: f);
+            return ListView(children: [
+              Padding(padding: const EdgeInsets.all(18), child: Image.network(cdn(logoUrl, 400), height: 36, alignment: AlignmentDirectional.centerStart, errorBuilder: (_, __, ___) => const Text('NOBA', style: TextStyle(fontSize: 22, letterSpacing: 6)))),
+              const Divider(height: 1),
+              item(tr(context, 'الرئيسية', 'Home'), () => nav.popUntil((r) => r.isFirst)),
+              ExpansionTile(
+                shape: const Border(),
+                collapsedShape: const Border(),
+                title: Text(tr(context, 'التصنيفات', 'Categories'), style: const TextStyle(fontWeight: FontWeight.w600)),
+                children: [for (final h in catHandles) sub(h)],
+              ),
+              item(tr(context, 'عن نوبا', 'About NOBA'), () => close((c) => goWeb(c, tr(c, 'عن نوبا', 'About NOBA'), '/pages/about-noba'))),
+              ExpansionTile(
+                shape: const Border(),
+                collapsedShape: const Border(),
+                title: Text(tr(context, 'الماركات', 'Brands'), style: const TextStyle(fontWeight: FontWeight.w600)),
+                children: [for (final h in menuBrandHandles) sub(h)],
+              ),
+              item(tr(context, 'عروض خاصة', 'Special offers'), () => close((c) => goCollection(c, 'green-friday'))),
+              item(tr(context, 'الأكثر مبيعًا', 'Best sellers'), () => close((c) => goCollection(c, 'besr-seller'))),
+              item(tr(context, 'وصل حديثًا', 'New arrivals'), () => close((c) => goCollection(c, 'new-arrival'))),
+              item(tr(context, 'تواصل معنا', 'Contact us'), () => close((c) => goWeb(c, tr(c, 'تواصل معنا', 'Contact us'), '/pages/contact'))),
+              item(tr(context, 'مجلة الجمال', 'Beauty magazine'), () => close((c) => goWeb(c, tr(c, 'مجلة الجمال', 'Beauty magazine'), '/blogs/news'))),
+              item(tr(context, 'الأسئلة الشائعة', 'FAQ'), () => close((c) => goWeb(c, tr(c, 'الأسئلة الشائعة', 'FAQ'), '/pages/faq'))),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.language),
+                title: Text(ar ? 'English' : 'العربية'),
+                onTap: () async {
+                  nav.popUntil((r) => r.isFirst);
+                  final code = ar ? 'en' : 'ar';
+                  try {
+                    (await SharedPreferences.getInstance()).setString('lang', code);
+                  } catch (_) {}
+                  appLocale.value = Locale(code);
+                },
+              ),
+            ]);
+          },
+        ),
+      ),
+    );
+  }
+}
+
+// ───────────────────────── gift feature ─────────────────────────
 
 void showGift(BuildContext context, Gift g, VoidCallback shop) {
   final ar = isAr(context);
@@ -118,108 +299,6 @@ void showGift(BuildContext context, Gift g, VoidCallback shop) {
   );
 }
 
-class HomeScreen extends StatefulWidget {
-  final VoidCallback onShop;
-  const HomeScreen({super.key, required this.onShop});
-  @override
-  State<HomeScreen> createState() => _HomeScreenState();
-}
-
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
-  late final AnimationController _ac = AnimationController(vsync: this, duration: const Duration(milliseconds: 3400))..repeat();
-  late Future<List<Map<String, dynamic>>> cols = Shopify.collections();
-  late Future<List<Map<String, dynamic>>> best = Shopify.products(best: true);
-
-  @override
-  void dispose() {
-    _ac.dispose();
-    super.dispose();
-  }
-
-  Future<void> _open(BuildContext context) async {
-    final g = await GiftStore.i.pick();
-    if (context.mounted) showGift(context, g, widget.onShop);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: RefreshIndicator(
-        onRefresh: () async => setState(() {
-          cols = Shopify.collections();
-          best = Shopify.products(best: true);
-        }),
-        child: ListView(padding: const EdgeInsets.fromLTRB(14, 8, 14, 80), children: [
-          const Center(child: Text('NOBA', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, letterSpacing: 8, color: greenD))),
-          const SizedBox(height: 10),
-          ListenableBuilder(
-            listenable: GiftStore.i,
-            builder: (context, _) => Container(
-              height: 170,
-              clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(borderRadius: BorderRadius.circular(22), gradient: const LinearGradient(colors: [green, greenD])),
-              child: Stack(children: [
-                Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(tr(context, 'عروض Green Friday\nلحد 30 نوفمبر', 'Green Friday deals\nUntil Nov 30'),
-                        style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800, height: 1.3)),
-                    const SizedBox(height: 4),
-                    if (GiftStore.i.canWin)
-                      Text(tr(context, 'اضغط على صندوق الهدية 🎁', 'Tap a gift box 🎁'), style: const TextStyle(color: Colors.white70)),
-                    const Spacer(),
-                    FilledButton(style: FilledButton.styleFrom(backgroundColor: gold, foregroundColor: const Color(0xFF1D1608)), onPressed: widget.onShop, child: Text(tr(context, 'تسوّق', 'Shop'))),
-                  ]),
-                ),
-                if (GiftStore.i.canWin)
-                  for (var n = 0; n < 3; n++)
-                    AnimatedBuilder(
-                      animation: _ac,
-                      builder: (context, _) {
-                        final t = (_ac.value + n * .33) % 1.0;
-                        return PositionedDirectional(
-                          end: 24.0 + n * 62,
-                          top: -50 + t * 200,
-                          child: GestureDetector(onTap: () => _open(context), child: const _GiftBox()),
-                        );
-                      },
-                    ),
-              ]),
-            ),
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            height: 96,
-            child: FutureBuilder(
-              future: cols,
-              builder: (context, s) {
-                final l = s.data ?? [];
-                return ListView(scrollDirection: Axis.horizontal, children: [
-                  for (final c in l)
-                    GestureDetector(
-                      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ProductList(title: c['title'], collection: c['handle']))),
-                      child: SizedBox(
-                        width: 76,
-                        child: Column(children: [
-                          ClipOval(child: SizedBox(width: 58, height: 58, child: img(c['image']?['url']))),
-                          const SizedBox(height: 4),
-                          Text(c['title'], maxLines: 2, textAlign: TextAlign.center, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                        ]),
-                      ),
-                    ),
-                ]);
-              },
-            ),
-          ),
-          Text(tr(context, 'الأكثر مبيعًا', 'Best sellers'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
-          ProductGrid(future: best),
-        ]),
-      ),
-    );
-  }
-}
-
 class _GiftBox extends StatelessWidget {
   const _GiftBox();
   @override
@@ -236,104 +315,325 @@ class _GiftBox extends StatelessWidget {
       );
 }
 
-class ProductGrid extends StatelessWidget {
-  final Future<List<Map<String, dynamic>>> future;
-  const ProductGrid({super.key, required this.future});
+class GiftBanner extends StatefulWidget {
+  const GiftBanner({super.key});
+  @override
+  State<GiftBanner> createState() => _GiftBannerState();
+}
+
+class _GiftBannerState extends State<GiftBanner> with SingleTickerProviderStateMixin {
+  late final AnimationController _ac = AnimationController(vsync: this, duration: const Duration(milliseconds: 3400))..repeat();
+  @override
+  void dispose() {
+    _ac.dispose();
+    super.dispose();
+  }
+
+  Future<void> _open(BuildContext context) async {
+    final g = await GiftStore.i.pick();
+    if (context.mounted) showGift(context, g, () {});
+  }
+
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder(
-      future: future,
-      builder: (context, s) {
-        if (s.connectionState != ConnectionState.done) return const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator()));
-        if (s.hasError) return Padding(padding: const EdgeInsets.all(20), child: Text(tr(context, 'تعذّر تحميل المنتجات. اسحب للتحديث.', 'Could not load products. Pull to refresh.')));
-        final l = s.data ?? [];
-        if (l.isEmpty) return Padding(padding: const EdgeInsets.all(20), child: Text(tr(context, 'مفيش منتجات', 'No products')));
-        return GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: l.length,
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: .68),
-          itemBuilder: (_, i) {
-            final p = l[i];
-            final cmp = money(p['variants']['nodes'][0]['compareAtPrice']?['amount']);
-            final price = money(p['priceRange']['minVariantPrice']['amount']);
-            return InkWell(
-              borderRadius: BorderRadius.circular(16),
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ProductScreen(p: p))),
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xFFE9E4D6))),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(12), child: SizedBox(width: double.infinity, child: img(p['featuredImage']?['url'])))),
-                  const SizedBox(height: 6),
-                  Text(p['title'], maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                  Row(children: [
-                    Text(egp(price, isAr(context)), style: const TextStyle(color: green, fontWeight: FontWeight.w800)),
-                    if (cmp > price) ...[
-                      const SizedBox(width: 6),
-                      Text(egp(cmp, isAr(context)), style: const TextStyle(fontSize: 11, color: Colors.black45, decoration: TextDecoration.lineThrough)),
-                    ],
-                  ]),
-                ]),
-              ),
-            );
-          },
+    return ListenableBuilder(
+      listenable: GiftStore.i,
+      builder: (context, _) {
+        if (!GiftStore.i.live) return const SizedBox.shrink();
+        return Container(
+          height: 150,
+          margin: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+          clipBehavior: Clip.antiAlias,
+          decoration: const BoxDecoration(gradient: LinearGradient(colors: [green, greenD])),
+          child: Stack(children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(tr(context, 'عروض Green Friday\nلحد 30 نوفمبر', 'Green Friday deals\nUntil Nov 30'), style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800, height: 1.3)),
+                const SizedBox(height: 4),
+                Text(GiftStore.i.canWin ? tr(context, 'اضغط على صندوق الهدية 🎁', 'Tap a gift box 🎁') : tr(context, 'هديتك محفوظة 🎁', 'Your gift is saved 🎁'), style: const TextStyle(color: Colors.white70)),
+                const Spacer(),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: gold, foregroundColor: const Color(0xFF1D1608), minimumSize: const Size(0, 36)),
+                  onPressed: GiftStore.i.canWin ? null : () => showGift(context, GiftStore.i.gift!, () {}),
+                  child: Text(tr(context, 'هديتي', 'My gift')),
+                ),
+              ]),
+            ),
+            if (GiftStore.i.canWin)
+              for (var n = 0; n < 3; n++)
+                AnimatedBuilder(
+                  animation: _ac,
+                  builder: (context, _) {
+                    final t = (_ac.value + n * .33) % 1.0;
+                    return PositionedDirectional(end: 20.0 + n * 62, top: -50 + t * 190, child: GestureDetector(onTap: () => _open(context), child: const _GiftBox()));
+                  },
+                ),
+          ]),
         );
       },
     );
   }
 }
 
-class CategoriesScreen extends StatefulWidget {
-  const CategoriesScreen({super.key});
-  @override
-  State<CategoriesScreen> createState() => _CategoriesScreenState();
-}
+// ───────────────────────── product card & lists ─────────────────────────
 
-class _CategoriesScreenState extends State<CategoriesScreen> {
-  final ctl = TextEditingController();
-  late Future<List<Map<String, dynamic>>> cols = Shopify.collections();
-  Future<List<Map<String, dynamic>>>? results;
+class ProductCard extends StatelessWidget {
+  final Map<String, dynamic> p;
+  const ProductCard({super.key, required this.p});
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: ListView(padding: const EdgeInsets.fromLTRB(14, 12, 14, 80), children: [
-        TextField(
-          controller: ctl,
-          textInputAction: TextInputAction.search,
-          decoration: InputDecoration(
-            hintText: tr(context, 'ابحث عن منتج', 'Search products'),
-            prefixIcon: const Icon(Icons.search),
-            filled: true,
-            fillColor: Colors.white,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+    final ar = isAr(context);
+    final vars = (p['variants']['nodes'] as List);
+    final price = money(p['priceRange']['minVariantPrice']['amount']);
+    final cmp = vars.isEmpty ? 0.0 : money(vars.first['compareAtPrice']?['amount']);
+    final sold = p['availableForSale'] != true;
+    final single = vars.length == 1;
+    final vendor = (p['vendor'] ?? '') as String;
+    return InkWell(
+      onTap: () => goProduct(context, p),
+      child: Container(
+        decoration: BoxDecoration(border: Border.all(color: line)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          AspectRatio(
+            aspectRatio: 1,
+            child: Stack(fit: StackFit.expand, children: [
+              img(p['featuredImage']?['url'], w: 500),
+              if (cmp > price && !sold)
+                PositionedDirectional(top: 6, start: 6, child: Container(color: ink, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), child: Text(tr(context, 'خصم', 'Sale'), style: const TextStyle(color: Colors.white, fontSize: 11)))),
+            ]),
           ),
-          onSubmitted: (v) => setState(() => results = v.trim().isEmpty ? null : Shopify.products(search: v.trim())),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (vendor.isNotEmpty) Text(vendor, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.black54)),
+              const SizedBox(height: 2),
+              Text(p['title'], maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, height: 1.25)),
+            ]),
+          ),
+          const Spacer(),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 6, children: [
+              Text(egp(price, ar), textDirection: TextDirection.ltr, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: cmp > price ? const Color(0xFFB3261E) : ink)),
+              if (cmp > price) Text(egp(cmp, ar), textDirection: TextDirection.ltr, style: const TextStyle(fontSize: 11, color: Colors.black45, decoration: TextDecoration.lineThrough)),
+            ]),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(minimumSize: const Size(0, 38), padding: EdgeInsets.zero),
+                onPressed: sold
+                    ? null
+                    : single
+                        ? () async {
+                            await CartStore.i.add(vars.first['id']);
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                content: Text(tr(context, 'تمت الإضافة إلى السلة', 'Added to cart')),
+                                action: SnackBarAction(label: tr(context, 'عرض السلة', 'View cart'), onPressed: () => goCart(context)),
+                              ));
+                            }
+                          }
+                        : () => goProduct(context, p),
+                child: Text(sold ? tr(context, 'نفذ', 'Sold out') : single ? tr(context, 'أضف إلى السلة', 'Add to cart') : tr(context, 'اختر الخيارات', 'Choose options'), style: const TextStyle(fontSize: 12.5)),
+              ),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+class ProductGridList extends StatelessWidget {
+  final List<Map<String, dynamic>> items;
+  const ProductGridList({super.key, required this.items});
+  @override
+  Widget build(BuildContext context) => GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        padding: EdgeInsets.zero,
+        itemCount: items.length,
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, mainAxisExtent: 360),
+        itemBuilder: (_, i) => ProductCard(p: items[i]),
+      );
+}
+
+class SectionHeader extends StatelessWidget {
+  final String title;
+  final String? handle;
+  final String? sub;
+  const SectionHeader(this.title, {super.key, this.handle, this.sub});
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(14, 28, 14, 12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(child: Text(title, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700))),
+            if (handle != null)
+              TextButton(onPressed: () => goCollection(context, handle!), child: Text(tr(context, 'عرض الكل', 'View all'), style: const TextStyle(color: ink, decoration: TextDecoration.underline))),
+          ]),
+          if (sub != null) Text(sub!, style: const TextStyle(color: Colors.black54, height: 1.4)),
+        ]),
+      );
+}
+
+class ProductRow extends StatelessWidget {
+  final String title, handle;
+  final Future<ProdPage> future;
+  final bool showDesc;
+  const ProductRow({super.key, required this.title, required this.handle, required this.future, this.showDesc = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SectionHeader(title, handle: handle),
+      SizedBox(
+        height: 360,
+        child: FutureBuilder<ProdPage>(
+          future: future,
+          builder: (context, s) {
+            if (s.connectionState != ConnectionState.done) return loading();
+            if (s.hasError) return Center(child: Text(tr(context, 'تعذّر تحميل المنتجات', 'Could not load products')));
+            final l = s.data!.nodes;
+            return ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              itemCount: l.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 10),
+              itemBuilder: (_, i) => SizedBox(width: 178, child: ProductCard(p: l[i])),
+            );
+          },
         ),
-        const SizedBox(height: 14),
-        if (results != null) ProductGrid(future: results!) else
-          FutureBuilder(
-            future: cols,
+      ),
+      if (showDesc)
+        FutureBuilder<ProdPage>(
+          future: future,
+          builder: (context, s) {
+            final d = s.data?.description ?? '';
+            return d.isEmpty ? const SizedBox.shrink() : Padding(padding: const EdgeInsets.fromLTRB(14, 14, 14, 0), child: ExpandText(d));
+          },
+        ),
+    ]);
+  }
+}
+
+class ExpandText extends StatefulWidget {
+  final String text;
+  const ExpandText(this.text, {super.key});
+  @override
+  State<ExpandText> createState() => _ExpandTextState();
+}
+
+class _ExpandTextState extends State<ExpandText> {
+  bool open = false;
+  @override
+  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(widget.text, maxLines: open ? null : 4, overflow: open ? TextOverflow.visible : TextOverflow.ellipsis, style: const TextStyle(height: 1.7, color: Colors.black87)),
+        TextButton(onPressed: () => setState(() => open = !open), child: Text(open ? tr(context, 'عرض أقل', 'Show less') : tr(context, 'عرض المزيد', 'Show more'), style: const TextStyle(color: ink))),
+      ]);
+}
+
+// ───────────────────────── home ─────────────────────────
+
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final _pages = <String, Future<ProdPage>>{};
+  Future<ProdPage> pg(String h) => _pages.putIfAbsent(h, () => Shopify.collectionPage(h, n: 12));
+  late Future<List<Map<String, dynamic>>> cats = Shopify.collectionsByHandles(homeCatHandles);
+  late Future<List<Map<String, dynamic>>> brands = Shopify.collectionsByHandles(brandHandles);
+  final email = TextEditingController();
+
+  Future<void> _subscribe() async {
+    final e = email.text.trim();
+    if (!e.contains('@')) return;
+    try {
+      await http.post(Uri.https(Config.shopDomain, '/contact'), body: {'form_type': 'customer', 'utf8': '✓', 'contact[tags]': 'newsletter', 'contact[email]': e});
+    } catch (_) {}
+    email.clear();
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'شكرًا لاشتراكك!', 'Thanks for subscribing!'))));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StorePage(
+      body: RefreshIndicator(
+        color: ink,
+        onRefresh: () async => setState(() {
+          _pages.clear();
+          cats = Shopify.collectionsByHandles(homeCatHandles);
+          brands = Shopify.collectionsByHandles(brandHandles);
+        }),
+        child: ListView(padding: const EdgeInsets.only(bottom: 90), children: [
+          const Slideshow(),
+          const GiftBanner(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 32, 14, 0),
+            child: Column(children: [
+              Text(tr(context, 'نوبا – متجر مستحضرات التجميل والعناية بالبشرة الأصلية في مصر', 'NOBA – Original cosmetics & skincare store in Egypt'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w700, height: 1.4)),
+              const SizedBox(height: 8),
+              Text(tr(context, 'تسوقي أحدث منتجات العناية بالبشرة والشعر والمكياج من أشهر الماركات العالمية والمحلية', 'Shop the latest skin care, hair care and makeup from top global and local brands'), textAlign: TextAlign.center, style: const TextStyle(color: Colors.black54, height: 1.5)),
+            ]),
+          ),
+          SectionHeader(tr(context, 'تسوق حسب الفئة', 'Shop by category')),
+          FutureBuilder<List<Map<String, dynamic>>>(
+            future: cats,
             builder: (context, s) {
-              if (s.connectionState != ConnectionState.done) return const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator()));
+              if (s.connectionState != ConnectionState.done) return loading();
               final l = s.data ?? [];
               return GridView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
+                padding: const EdgeInsets.symmetric(horizontal: 14),
                 itemCount: l.length,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 1.1),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 14, crossAxisSpacing: 10, mainAxisExtent: 215),
                 itemBuilder: (_, i) {
                   final c = l[i];
                   return InkWell(
-                    borderRadius: BorderRadius.circular(16),
-                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ProductList(title: c['title'], collection: c['handle']))),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(16),
-                      child: Stack(fit: StackFit.expand, children: [
-                        img(c['image']?['url']),
-                        Container(decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.center, colors: [Color(0xCC034B37), Colors.transparent]))),
-                        Positioned(left: 10, right: 10, bottom: 8, child: Text(c['title'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800))),
+                    onTap: () => goCollection(context, c['handle'], c['title']),
+                    child: Column(children: [
+                      Expanded(child: img(c['image']?['url'], w: 500)),
+                      Padding(padding: const EdgeInsets.only(top: 8), child: Text(c['title'], textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600))),
+                    ]),
+                  );
+                },
+              );
+            },
+          ),
+          ProductRow(title: tr(context, 'تسوق الافضل مبيعا', 'Shop best sellers'), handle: 'green-friday', future: pg('green-friday')),
+          ProductRow(title: 'MAKEUP COLLECTION', handle: 'makeup', future: pg('makeup'), showDesc: true),
+          SectionHeader(tr(context, 'تسوق حسب العلامة التجارية', 'Shop by brand'), sub: tr(context, 'اكتشف أفضل العلامات التجارية لدينا', 'Discover our best brands')),
+          FutureBuilder<List<Map<String, dynamic>>>(
+            future: brands,
+            builder: (context, s) {
+              if (s.connectionState != ConnectionState.done) return loading();
+              final l = s.data ?? [];
+              return GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                itemCount: l.length,
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: .9),
+                itemBuilder: (_, i) {
+                  final c = l[i];
+                  return InkWell(
+                    onTap: () => goCollection(context, c['handle'], c['title']),
+                    child: Container(
+                      decoration: BoxDecoration(border: Border.all(color: line)),
+                      padding: const EdgeInsets.all(6),
+                      child: Column(children: [
+                        Expanded(child: img(c['image']?['url'], fit: BoxFit.contain, w: 300)),
+                        const SizedBox(height: 4),
+                        Text(c['title'], maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
                       ]),
                     ),
                   );
@@ -341,20 +641,266 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
               );
             },
           ),
+          ProductRow(title: tr(context, 'تسوق وصلنا حديثا', 'Shop new arrivals'), handle: 'skin-care', future: pg('skin-care')),
+          ProductRow(title: tr(context, 'استكشف عطور مختارة', 'Explore selected fragrances'), handle: 'fragrance', future: pg('fragrance')),
+          SectionHeader(tr(context, 'ما نقدمه فى NOBA', 'What we offer at NOBA')),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              for (final f in [
+                (Icons.verified_outlined, tr(context, 'منتجات أصلية', 'Original products')),
+                (Icons.local_shipping_outlined, tr(context, 'شحن سريع', 'Fast shipping')),
+                (Icons.support_agent, tr(context, 'خدمة ما بعد البيع', 'After-sales service')),
+              ])
+                Expanded(child: Column(children: [Icon(f.$1, size: 38), const SizedBox(height: 8), Text(f.$2, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w600))])),
+            ]),
+          ),
+          SectionHeader(tr(context, 'يقول العملاء عنا', 'What customers say')),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              for (var i = 0; i < 4; i++) const Icon(Icons.star, color: Color(0xFFF5A623)),
+              const Icon(Icons.star_half, color: Color(0xFFF5A623)),
+              const SizedBox(width: 8),
+              Text(tr(context, '4.25 (16 تقييم)', '4.25 (16 reviews)')),
+            ]),
+          ),
+          Container(
+            margin: const EdgeInsets.only(top: 32),
+            padding: const EdgeInsets.all(18),
+            color: soft,
+            child: Column(children: [
+              Text(tr(context, 'اشترك في نشرتنا البريدية', 'Subscribe to our newsletter'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 12),
+              TextField(controller: email, keyboardType: TextInputType.emailAddress, textDirection: TextDirection.ltr, decoration: InputDecoration(hintText: tr(context, 'البريد الإلكتروني', 'Email'), filled: true, fillColor: Colors.white)),
+              const SizedBox(height: 10),
+              SizedBox(width: double.infinity, child: FilledButton(onPressed: _subscribe, child: Text(tr(context, 'اشترك', 'Subscribe')))),
+            ]),
+          ),
+          const Footer(),
+        ]),
+      ),
+    );
+  }
+}
+
+class Slideshow extends StatefulWidget {
+  const Slideshow({super.key});
+  @override
+  State<Slideshow> createState() => _SlideshowState();
+}
+
+class _SlideshowState extends State<Slideshow> {
+  int i = 0;
+  Timer? t;
+  @override
+  void initState() {
+    super.initState();
+    t = Timer.periodic(const Duration(seconds: 5), (_) => setState(() => i = (i + 1) % slideUrls.length));
+  }
+
+  @override
+  void dispose() {
+    t?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(children: [
+      AnimatedSwitcher(
+        duration: const Duration(milliseconds: 500),
+        child: Image.network(cdn(slideUrls[i], 1000), key: ValueKey(i), width: double.infinity, fit: BoxFit.fitWidth, errorBuilder: (_, __, ___) => const SizedBox(height: 200), loadingBuilder: (c, child, p) => p == null ? child : const SizedBox(height: 200)),
+      ),
+      Positioned(
+        left: 0,
+        right: 0,
+        bottom: 8,
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          for (var n = 0; n < slideUrls.length; n++)
+            GestureDetector(
+              onTap: () => setState(() => i = n),
+              child: Container(margin: const EdgeInsets.all(3), width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: n == i ? ink : Colors.white70, border: Border.all(color: ink, width: .5))),
+            ),
+        ]),
+      ),
+    ]);
+  }
+}
+
+class Footer extends StatelessWidget {
+  const Footer({super.key});
+  @override
+  Widget build(BuildContext context) {
+    Widget link(String t, String path) => InkWell(onTap: () => goWeb(context, t, path), child: Padding(padding: const EdgeInsets.symmetric(vertical: 7), child: Text(t, style: const TextStyle(color: Colors.white70))));
+    Widget social(IconData i, String url) => IconButton(icon: Icon(i, color: Colors.white), onPressed: () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication));
+    return Container(
+      color: ink,
+      padding: const EdgeInsets.fromLTRB(18, 24, 18, 24),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          social(Icons.facebook, 'https://www.facebook.com/share/15yeCKwLyu/'),
+          social(Icons.camera_alt_outlined, 'https://www.instagram.com/nobacosmatics'),
+          social(Icons.music_note, 'https://www.tiktok.com/@nobaeg25'),
+        ]),
+        const SizedBox(height: 8),
+        link(tr(context, 'سياسة الخصوصية', 'Privacy policy'), '/policies/privacy-policy'),
+        link(tr(context, 'سياسة الاسترجاع', 'Refund policy'), '/policies/refund-policy'),
+        link(tr(context, 'سياسة الشحن', 'Shipping policy'), '/policies/shipping-policy'),
+        link(tr(context, 'معلومات الاتصال', 'Contact information'), '/policies/contact-information'),
+        link(tr(context, 'شروط الخدمة', 'Terms of service'), '/policies/terms-of-service'),
+        const SizedBox(height: 14),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          for (final t in ['American Express', 'Apple Pay', 'Mastercard', 'Visa'])
+            Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(border: Border.all(color: Colors.white38)), child: Text(t, style: const TextStyle(color: Colors.white, fontSize: 11))),
+        ]),
+        const SizedBox(height: 16),
+        const Text('© 2026 NOBA', style: TextStyle(color: Colors.white54, fontSize: 12)),
       ]),
     );
   }
 }
 
-class ProductList extends StatelessWidget {
-  final String title, collection;
-  const ProductList({super.key, required this.title, required this.collection});
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: Text(title)),
-        body: ListView(padding: const EdgeInsets.all(14), children: [ProductGrid(future: Shopify.products(collection: collection))]),
-      );
+// ───────────────────────── collection ─────────────────────────
+
+class _Sort {
+  final String ar, en, key;
+  final bool rev;
+  const _Sort(this.ar, this.en, this.key, this.rev);
 }
+
+const _sorts = [
+  _Sort('المميزة', 'Featured', 'COLLECTION_DEFAULT', false),
+  _Sort('الأكثر مبيعًا', 'Best selling', 'BEST_SELLING', false),
+  _Sort('أبجديًا، أ-ي', 'Alphabetically, A-Z', 'TITLE', false),
+  _Sort('أبجديًا، ي-أ', 'Alphabetically, Z-A', 'TITLE', true),
+  _Sort('السعر، من الأقل للأعلى', 'Price, low to high', 'PRICE', false),
+  _Sort('السعر، من الأعلى للأقل', 'Price, high to low', 'PRICE', true),
+  _Sort('التاريخ، من الأحدث للأقدم', 'Date, new to old', 'CREATED', true),
+  _Sort('التاريخ، من الأقدم للأحدث', 'Date, old to new', 'CREATED', false),
+];
+
+class CollectionScreen extends StatefulWidget {
+  final String handle;
+  final String? title;
+  const CollectionScreen({super.key, required this.handle, this.title});
+  @override
+  State<CollectionScreen> createState() => _CollectionScreenState();
+}
+
+class _CollectionScreenState extends State<CollectionScreen> {
+  int si = 0;
+  final items = <Map<String, dynamic>>[];
+  String? cursor;
+  bool hasNext = false, busy = true, failed = false;
+  String title = '', desc = '';
+
+  @override
+  void initState() {
+    super.initState();
+    title = widget.title ?? '';
+    _load();
+  }
+
+  Future<void> _load({bool more = false}) async {
+    setState(() {
+      busy = true;
+      failed = false;
+      if (!more) items.clear();
+    });
+    try {
+      final s = _sorts[si];
+      final p = await Shopify.collectionPage(widget.handle, sort: s.key, reverse: s.rev, after: more ? cursor : null);
+      items.addAll(p.nodes);
+      cursor = p.cursor;
+      hasNext = p.hasNext;
+      if (p.title.isNotEmpty) title = p.title;
+      desc = p.description;
+    } catch (_) {
+      failed = true;
+    }
+    if (mounted) setState(() => busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ar = isAr(context);
+    return StorePage(
+      body: ListView(padding: const EdgeInsets.fromLTRB(14, 18, 14, 90), children: [
+        Text(title, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 12),
+        Row(children: [
+          Text(tr(context, 'ترتيب حسب:', 'Sort by:')),
+          const SizedBox(width: 8),
+          Expanded(
+            child: DropdownButton<int>(
+              isExpanded: true,
+              value: si,
+              underline: Container(height: 1, color: line),
+              items: [for (var i = 0; i < _sorts.length; i++) DropdownMenuItem(value: i, child: Text(ar ? _sorts[i].ar : _sorts[i].en, overflow: TextOverflow.ellipsis))],
+              onChanged: (v) {
+                if (v == null) return;
+                si = v;
+                _load();
+              },
+            ),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        if (items.isNotEmpty) ProductGridList(items: items),
+        if (busy) loading(),
+        if (failed) Padding(padding: const EdgeInsets.all(20), child: Center(child: Text(tr(context, 'تعذّر تحميل المنتجات', 'Could not load products')))),
+        if (!busy && !failed && items.isEmpty) Padding(padding: const EdgeInsets.all(30), child: Center(child: Text(tr(context, 'لا توجد منتجات', 'No products found')))),
+        if (!busy && hasNext)
+          Padding(padding: const EdgeInsets.only(top: 14), child: OutlinedButton(onPressed: () => _load(more: true), child: Text(tr(context, 'عرض المزيد', 'Load more')))),
+        if (desc.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 20), child: ExpandText(desc)),
+      ]),
+    );
+  }
+}
+
+// ───────────────────────── search ─────────────────────────
+
+class SearchScreen extends StatefulWidget {
+  const SearchScreen({super.key});
+  @override
+  State<SearchScreen> createState() => _SearchScreenState();
+}
+
+class _SearchScreenState extends State<SearchScreen> {
+  final ctl = TextEditingController();
+  Future<List<Map<String, dynamic>>>? results;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: TextField(
+          controller: ctl,
+          autofocus: true,
+          textInputAction: TextInputAction.search,
+          decoration: InputDecoration(hintText: tr(context, 'يبحث', 'Search'), border: InputBorder.none, enabledBorder: InputBorder.none),
+          onSubmitted: (v) => setState(() => results = v.trim().isEmpty ? null : Shopify.search(v.trim())),
+        ),
+        actions: [IconButton(icon: const Icon(Icons.search), onPressed: () => setState(() => results = ctl.text.trim().isEmpty ? null : Shopify.search(ctl.text.trim())))],
+      ),
+      body: results == null
+          ? const SizedBox.shrink()
+          : FutureBuilder<List<Map<String, dynamic>>>(
+              future: results,
+              builder: (context, s) {
+                if (s.connectionState != ConnectionState.done) return loading();
+                if (s.hasError) return Center(child: Text(tr(context, 'تعذّر البحث', 'Search failed')));
+                final l = s.data ?? [];
+                if (l.isEmpty) return Center(child: Text(tr(context, 'لا توجد نتائج', 'No results')));
+                return ListView(padding: const EdgeInsets.all(14), children: [ProductGridList(items: l)]);
+              },
+            ),
+    );
+  }
+}
+
+// ───────────────────────── product ─────────────────────────
 
 class ProductScreen extends StatefulWidget {
   final Map<String, dynamic> p;
@@ -364,106 +910,225 @@ class ProductScreen extends StatefulWidget {
 }
 
 class _ProductScreenState extends State<ProductScreen> {
-  int v = 0;
+  late List<String> sel;
+  int qty = 1, page = 0;
+
+  List get vars => widget.p['variants']['nodes'] as List;
+  List get opts => widget.p['options'] as List;
+
+  @override
+  void initState() {
+    super.initState();
+    final first = vars.firstWhere((v) => v['availableForSale'] == true, orElse: () => vars.first);
+    sel = (first['title'] as String).split(' / ');
+    _fix();
+  }
+
+  void _fix() {
+    if (sel.length != opts.length) sel = [for (final o in opts) (o['values'] as List).first as String];
+  }
+
+  Map<String, dynamic>? get cur {
+    final t = sel.join(' / ');
+    for (final v in vars) {
+      if (v['title'] == t) return Map<String, dynamic>.from(v);
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = widget.p;
-    final vars = (p['variants']['nodes'] as List);
-    final sel = vars[v];
-    final imgs = (p['images']['nodes'] as List).map((e) => e['url'] as String).toList();
     final ar = isAr(context);
-    return Scaffold(
-      appBar: AppBar(),
-      body: ListView(padding: const EdgeInsets.fromLTRB(0, 0, 0, 100), children: [
+    final v = cur;
+    final imgs = (p['images']['nodes'] as List).map((e) => e['url'] as String).toList();
+    final price = money(v?['price']?['amount'] ?? p['priceRange']['minVariantPrice']['amount']);
+    final cmp = money(v?['compareAtPrice']?['amount']);
+    final ok = v != null && v['availableForSale'] == true;
+    final vendor = (p['vendor'] ?? '') as String;
+    return StorePage(
+      body: ListView(padding: const EdgeInsets.only(bottom: 100), children: [
         SizedBox(
-          height: 360,
-          child: PageView(children: [for (final u in imgs.isEmpty ? [p['featuredImage']?['url']] : imgs) img(u as String?, fit: BoxFit.cover)]),
+          height: 380,
+          child: Stack(children: [
+            PageView(onPageChanged: (i) => setState(() => page = i), children: [for (final u in imgs.isEmpty ? [p['featuredImage']?['url']] : imgs) img(u as String?, fit: BoxFit.contain, w: 900)]),
+            if (imgs.length > 1)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 6,
+                child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [for (var i = 0; i < imgs.length; i++) Container(margin: const EdgeInsets.all(3), width: 7, height: 7, decoration: BoxDecoration(shape: BoxShape.circle, color: i == page ? ink : Colors.black26))]),
+              ),
+          ]),
         ),
         Padding(
           padding: const EdgeInsets.all(16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(p['title'], style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 6),
-            Text(egp(sel['price']['amount'], ar), style: const TextStyle(fontSize: 22, color: green, fontWeight: FontWeight.w800)),
-            if (vars.length > 1) ...[
-              const SizedBox(height: 10),
-              Wrap(spacing: 8, children: [
-                for (var i = 0; i < vars.length; i++)
-                  ChoiceChip(label: Text(vars[i]['title']), selected: v == i, onSelected: vars[i]['availableForSale'] == true ? (_) => setState(() => v = i) : null),
-              ]),
-            ],
+            if (vendor.isNotEmpty) Text(vendor, style: const TextStyle(color: Colors.black54)),
+            const SizedBox(height: 4),
+            Text(p['title'], style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, height: 1.3)),
+            const SizedBox(height: 10),
+            Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 10, children: [
+              Text(egp(price, ar), textDirection: TextDirection.ltr, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: cmp > price ? const Color(0xFFB3261E) : ink)),
+              if (cmp > price) Text(egp(cmp, ar), textDirection: TextDirection.ltr, style: const TextStyle(color: Colors.black45, decoration: TextDecoration.lineThrough)),
+              if (cmp > price) Container(color: ink, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), child: Text(tr(context, 'خصم', 'Sale'), style: const TextStyle(color: Colors.white, fontSize: 12))),
+            ]),
+            if (vars.length > 1)
+              for (var oi = 0; oi < opts.length; oi++) ...[
+                const SizedBox(height: 16),
+                Text(opts[oi]['name'], style: const TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  for (final val in (opts[oi]['values'] as List))
+                    ChoiceChip(
+                      label: Text('$val'),
+                      selected: sel[oi] == val,
+                      showCheckmark: false,
+                      labelStyle: TextStyle(color: sel[oi] == val ? Colors.white : ink),
+                      onSelected: (_) => setState(() => sel[oi] = '$val'),
+                    ),
+                ]),
+              ],
+            const SizedBox(height: 18),
+            Row(children: [
+              Text(tr(context, 'الكمية', 'Quantity')),
+              const Spacer(),
+              Container(
+                decoration: BoxDecoration(border: Border.all(color: line)),
+                child: Row(children: [
+                  IconButton(icon: const Icon(Icons.remove), onPressed: qty > 1 ? () => setState(() => qty--) : null),
+                  Text('$qty'),
+                  IconButton(icon: const Icon(Icons.add), onPressed: () => setState(() => qty++)),
+                ]),
+              ),
+            ]),
             const SizedBox(height: 14),
-            Text('${p['description']}', style: const TextStyle(height: 1.7, color: Colors.black87)),
+            ListenableBuilder(
+              listenable: CartStore.i,
+              builder: (context, _) => Column(children: [
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    onPressed: !ok || CartStore.i.busy
+                        ? null
+                        : () async {
+                            await CartStore.i.add(v!['id'], qty);
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                content: Text(tr(context, 'تمت الإضافة إلى السلة', 'Added to cart')),
+                                action: SnackBarAction(label: tr(context, 'عرض السلة', 'View cart'), onPressed: () => goCart(context)),
+                              ));
+                            }
+                          },
+                    child: Text(ok ? tr(context, 'أضف إلى السلة', 'Add to cart') : tr(context, 'نفذ', 'Sold out')),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: !ok || CartStore.i.busy
+                        ? null
+                        : () async {
+                            await CartStore.i.add(v!['id'], qty);
+                            final u = CartStore.i.checkoutUrl;
+                            if (u != null && context.mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => WebPage(title: tr(context, 'إتمام الطلب', 'Checkout'), url: u)));
+                          },
+                    child: Text(tr(context, 'اشتر الآن', 'Buy it now')),
+                  ),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 20),
+            if ('${p['description']}'.isNotEmpty) ExpandText('${p['description']}'),
           ]),
         ),
       ]),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: ListenableBuilder(
-            listenable: CartStore.i,
-            builder: (context, _) => FilledButton(
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-              onPressed: sel['availableForSale'] != true || CartStore.i.busy
-                  ? null
-                  : () async {
-                      await CartStore.i.add(sel['id']);
-                      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'اتضاف للسلة', 'Added to cart'))));
-                    },
-              child: Text(sel['availableForSale'] == true ? tr(context, 'أضف للسلة', 'Add to cart') : tr(context, 'غير متوفر', 'Sold out')),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
+
+// ───────────────────────── cart ─────────────────────────
 
 class CartScreen extends StatelessWidget {
   const CartScreen({super.key});
   @override
   Widget build(BuildContext context) {
     final ar = isAr(context);
-    return SafeArea(
-      child: ListenableBuilder(
+    return StorePage(
+      body: ListenableBuilder(
         listenable: CartStore.i,
         builder: (context, _) {
           final c = CartStore.i;
           final left = (Config.freeShipAt - c.total).clamp(0, Config.freeShipAt).toDouble();
-          if (c.lines.isEmpty) return Center(child: Text(tr(context, 'السلة فاضية', 'Your cart is empty')));
-          return ListView(padding: const EdgeInsets.fromLTRB(14, 12, 14, 80), children: [
-            Text(tr(context, 'السلة', 'Cart'), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 8),
+          if (c.lines.isEmpty) {
+            return Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Text(tr(context, 'سلة التسوق فارغة', 'Your cart is empty'), style: const TextStyle(fontSize: 18)),
+                const SizedBox(height: 14),
+                FilledButton(onPressed: () => Navigator.popUntil(context, (r) => r.isFirst), child: Text(tr(context, 'متابعة التسوق', 'Continue shopping'))),
+              ]),
+            );
+          }
+          return ListView(padding: const EdgeInsets.fromLTRB(14, 16, 14, 90), children: [
+            Text(tr(context, 'سلة التسوق', 'Cart'), style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(12),
+              color: soft,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(left > 0 ? tr(context, 'أنت على بعد ${left.toStringAsFixed(2)} EGP من الحصول على شحن مجاني', 'You are ${left.toStringAsFixed(2)} EGP away from free shipping') : tr(context, '🎉 حصلت على شحن مجاني', '🎉 You get free shipping')),
+                const SizedBox(height: 8),
+                LinearProgressIndicator(value: (c.total / Config.freeShipAt).clamp(0, 1).toDouble(), minHeight: 6, color: ink, backgroundColor: Colors.white),
+              ]),
+            ),
+            const SizedBox(height: 10),
             for (final l in c.lines)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: ClipRRect(borderRadius: BorderRadius.circular(10), child: SizedBox(width: 56, height: 56, child: img(l['merchandise']['image']?['url']))),
-                title: Text(l['merchandise']['product']['title'], maxLines: 2, overflow: TextOverflow.ellipsis),
-                subtitle: Text(egp(l['cost']['totalAmount']['amount'], ar)),
-                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                  IconButton(icon: const Icon(Icons.remove_circle_outline), onPressed: () => c.setQty(l['id'], (l['quantity'] as int) - 1)),
-                  Text('${l['quantity']}'),
-                  IconButton(icon: const Icon(Icons.add_circle_outline), onPressed: () => c.setQty(l['id'], (l['quantity'] as int) + 1)),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  SizedBox(width: 74, height: 74, child: img(l['merchandise']['image']?['url'], w: 200)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(l['merchandise']['product']['title'], maxLines: 2, overflow: TextOverflow.ellipsis),
+                      if (l['merchandise']['title'] != 'Default Title') Text(l['merchandise']['title'], style: const TextStyle(color: Colors.black54, fontSize: 12)),
+                      const SizedBox(height: 4),
+                      Text(egp(l['cost']['totalAmount']['amount'], ar), textDirection: TextDirection.ltr, style: const TextStyle(fontWeight: FontWeight.w700)),
+                      Row(children: [
+                        Container(
+                          decoration: BoxDecoration(border: Border.all(color: line)),
+                          child: Row(children: [
+                            IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.remove, size: 18), onPressed: () => c.setQty(l['id'], (l['quantity'] as int) - 1)),
+                            Text('${l['quantity']}'),
+                            IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.add, size: 18), onPressed: () => c.setQty(l['id'], (l['quantity'] as int) + 1)),
+                          ]),
+                        ),
+                        const Spacer(),
+                        IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => c.setQty(l['id'], 0)),
+                      ]),
+                    ]),
+                  ),
                 ]),
               ),
             const Divider(),
-            Text(left > 0 ? tr(context, 'باقي ${left.round()} جنيه للشحن المجاني', '${left.round()} EGP left for free shipping') : tr(context, '🎉 شحنك مجاني', '🎉 Free shipping unlocked')),
-            const SizedBox(height: 6),
-            LinearProgressIndicator(value: (c.total / Config.freeShipAt).clamp(0, 1).toDouble(), minHeight: 8, borderRadius: BorderRadius.circular(6)),
-            const SizedBox(height: 12),
             ListTile(
               contentPadding: EdgeInsets.zero,
               title: Text(tr(context, 'كود الخصم', 'Discount code')),
-              trailing: Text(c.code ?? '—', textDirection: TextDirection.ltr, style: const TextStyle(fontWeight: FontWeight.w800)),
+              trailing: Text(c.code ?? '—', textDirection: TextDirection.ltr, style: const TextStyle(fontWeight: FontWeight.w700)),
               onTap: () => _codeDialog(context),
             ),
-            ListTile(contentPadding: EdgeInsets.zero, title: Text(tr(context, 'الإجمالي', 'Total'), style: const TextStyle(fontWeight: FontWeight.w800)), trailing: Text(egp(c.total, ar), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: green))),
+            ListTile(contentPadding: EdgeInsets.zero, title: Text(tr(context, 'الإجمالي', 'Total'), style: const TextStyle(fontWeight: FontWeight.w700)), trailing: Text(egp(c.total, ar), textDirection: TextDirection.ltr, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700))),
+            Text(tr(context, 'الضرائب والشحن يتم احتسابهما عند إتمام الطلب', 'Taxes and shipping calculated at checkout'), style: const TextStyle(color: Colors.black54, fontSize: 12)),
             if (c.error != null) Text(c.error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
-            const SizedBox(height: 8),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: gold, foregroundColor: const Color(0xFF1D1608), minimumSize: const Size.fromHeight(52)),
-              onPressed: c.checkoutUrl == null ? null : () => Navigator.push(context, MaterialPageRoute(builder: (_) => WebPage(title: tr(context, 'إتمام الطلب', 'Checkout'), url: c.checkoutUrl!))),
-              child: Text(tr(context, 'إتمام الطلب', 'Checkout')),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                style: FilledButton.styleFrom(minimumSize: const Size(0, 52)),
+                onPressed: c.checkoutUrl == null ? null : () => Navigator.push(context, MaterialPageRoute(builder: (_) => WebPage(title: tr(context, 'إتمام الطلب', 'Checkout'), url: c.checkoutUrl!))),
+                child: Text(tr(context, 'إتمام الطلب', 'Check out')),
+              ),
             ),
           ]);
         },
@@ -476,32 +1141,25 @@ class CartScreen extends StatelessWidget {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
+        shape: const RoundedRectangleBorder(),
         title: Text(tr(ctx, 'كود الخصم', 'Discount code')),
         content: TextField(controller: t, textDirection: TextDirection.ltr, textCapitalization: TextCapitalization.characters),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'إلغاء', 'Cancel'))),
-          FilledButton(onPressed: () { CartStore.i.applyCode(t.text.trim()); Navigator.pop(ctx); }, child: Text(tr(ctx, 'تطبيق', 'Apply'))),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'إلغاء', 'Cancel'), style: const TextStyle(color: ink))),
+          FilledButton(
+            onPressed: () {
+              CartStore.i.applyCode(t.text.trim());
+              Navigator.pop(ctx);
+            },
+            child: Text(tr(ctx, 'تطبيق', 'Apply')),
+          ),
         ],
       ),
     );
   }
 }
 
-class AccountScreen extends StatelessWidget {
-  const AccountScreen({super.key});
-  @override
-  Widget build(BuildContext context) {
-    Widget row(IconData i, String t, VoidCallback f) => ListTile(leading: Icon(i, color: green), title: Text(t), trailing: const Icon(Icons.chevron_right), onTap: f);
-    return SafeArea(
-      child: ListView(padding: const EdgeInsets.fromLTRB(8, 12, 8, 80), children: [
-        Padding(padding: const EdgeInsets.all(8), child: Text(tr(context, 'حسابي', 'Account'), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800))),
-        row(Icons.login, tr(context, 'تسجيل الدخول وطلباتي', 'Sign in & my orders'), () => Navigator.push(context, MaterialPageRoute(builder: (_) => WebPage(title: tr(context, 'حسابي', 'Account'), url: 'https://${Config.shopDomain}/account')))),
-        row(Icons.local_shipping_outlined, tr(context, 'سياسة الشحن', 'Shipping policy'), () => Navigator.push(context, MaterialPageRoute(builder: (_) => WebPage(title: tr(context, 'سياسة الشحن', 'Shipping policy'), url: 'https://${Config.shopDomain}/policies/shipping-policy')))),
-        row(Icons.chat, tr(context, 'تواصل معنا على واتساب', 'Chat on WhatsApp'), openWhatsApp),
-      ]),
-    );
-  }
-}
+// ───────────────────────── web pages (account, checkout, policies) ─────────────────────────
 
 class WebPage extends StatefulWidget {
   final String title, url;
@@ -513,7 +1171,16 @@ class WebPage extends StatefulWidget {
 class _WebPageState extends State<WebPage> {
   late final WebViewController c = WebViewController()
     ..setJavaScriptMode(JavaScriptMode.unrestricted)
+    ..setNavigationDelegate(NavigationDelegate(onNavigationRequest: (r) {
+      final u = Uri.tryParse(r.url);
+      final ext = u != null && (u.scheme == 'tel' || u.scheme == 'mailto' || ['wa.me', 'api.whatsapp.com', 'www.facebook.com', 'www.instagram.com', 'www.tiktok.com'].contains(u.host));
+      if (ext) {
+        launchUrl(u, mode: LaunchMode.externalApplication);
+        return NavigationDecision.prevent;
+      }
+      return NavigationDecision.navigate;
+    }))
     ..loadRequest(Uri.parse(widget.url));
   @override
-  Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: Text(widget.title)), body: WebViewWidget(controller: c));
+  Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: Text(widget.title, style: const TextStyle(fontSize: 16))), body: WebViewWidget(controller: c));
 }

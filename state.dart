@@ -5,7 +5,7 @@ import 'config.dart';
 import 'shopify.dart';
 
 double money(dynamic v) => double.tryParse('${v ?? 0}') ?? 0;
-String egp(dynamic v, bool ar) => '${money(v).round()} ${ar ? 'ج.م' : 'EGP'}';
+String egp(dynamic v, bool ar) => 'LE ${money(v).toStringAsFixed(2)} EGP';
 
 class CartStore extends ChangeNotifier {
   static final i = CartStore._();

@@ -5,9 +5,10 @@ import 'config.dart';
 String apiLang = 'AR';
 
 const _p = '''
-id handle title description
+id handle title description vendor availableForSale
 featuredImage{url}
-images(first:6){nodes{url}}
+images(first:8){nodes{url}}
+options{name values}
 priceRange{minVariantPrice{amount}}
 variants(first:30){nodes{id title availableForSale price{amount} compareAtPrice{amount}}}
 ''';
@@ -20,22 +21,37 @@ lines(first:50){nodes{id quantity cost{totalAmount{amount}}
  merchandise{... on ProductVariant{id title product{title} image{url}}}}}
 ''';
 
+class ProdPage {
+  final String title, description;
+  final List<Map<String, dynamic>> nodes;
+  final bool hasNext;
+  final String? cursor;
+  ProdPage(this.title, this.description, this.nodes, this.hasNext, this.cursor);
+}
+
 class Shopify {
   static Future<List<Map<String, dynamic>>> collections() async {
     final d = await _raw('query(\$lang:LanguageCode!) @inContext(language:\$lang,country:EG){collections(first:30){nodes{id handle title image{url}}}}');
     return List<Map<String, dynamic>>.from(d['collections']['nodes']);
   }
 
-  static Future<List<Map<String, dynamic>>> products({String? collection, String? search, bool best = false}) async {
-    return _prods(collection, search, best);
+  static Future<List<Map<String, dynamic>>> collectionsByHandles(List<String> hs) async {
+    final f = [for (var i = 0; i < hs.length; i++) 'c$i:collection(handle:"${hs[i]}"){handle title description image{url}}'].join(' ');
+    final d = await _raw('query(\$lang:LanguageCode!) @inContext(language:\$lang,country:EG){$f}');
+    return [for (var i = 0; i < hs.length; i++) if (d['c$i'] != null) Map<String, dynamic>.from(d['c$i'])];
   }
 
-  static Future<List<Map<String, dynamic>>> _prods(String? col, String? search, bool best) async {
-    if (col != null) {
-      final d = await _raw('query(\$h:String!,\$lang:LanguageCode!) @inContext(language:\$lang,country:EG){collection(handle:\$h){products(first:40){nodes{$_p}}}}', {'h': col});
-      return List<Map<String, dynamic>>.from(d['collection']?['products']['nodes'] ?? []);
-    }
-    final d = await _raw('query(\$s:String,\$lang:LanguageCode!) @inContext(language:\$lang,country:EG){products(first:40,query:\$s${best ? ',sortKey:BEST_SELLING' : ''}){nodes{$_p}}}', {'s': search});
+  /// Products of a collection. sort: COLLECTION_DEFAULT, BEST_SELLING, CREATED, PRICE, TITLE
+  static Future<ProdPage> collectionPage(String handle, {String sort = 'COLLECTION_DEFAULT', bool reverse = false, String? after, int n = 24}) async {
+    final d = await _raw('query(\$h:String!,\$a:String,\$lang:LanguageCode!) @inContext(language:\$lang,country:EG){collection(handle:\$h){title description products(first:$n,after:\$a,sortKey:$sort,reverse:$reverse){pageInfo{hasNextPage endCursor} nodes{$_p}}}}', {'h': handle, 'a': after});
+    final c = d['collection'];
+    if (c == null) return ProdPage('', '', [], false, null);
+    final pr = c['products'];
+    return ProdPage(c['title'] ?? '', c['description'] ?? '', List<Map<String, dynamic>>.from(pr['nodes']), pr['pageInfo']['hasNextPage'] == true, pr['pageInfo']['endCursor']);
+  }
+
+  static Future<List<Map<String, dynamic>>> search(String q) async {
+    final d = await _raw('query(\$s:String!,\$lang:LanguageCode!) @inContext(language:\$lang,country:EG){products(first:40,query:\$s){nodes{$_p}}}', {'s': q});
     return List<Map<String, dynamic>>.from(d['products']['nodes']);
   }
 
