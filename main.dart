@@ -70,6 +70,7 @@ class _BootState extends State<Boot> {
     super.initState();
     CartStore.i.load();
     GiftStore.i.load();
+    Shopify.loadContent();
   }
 
   @override

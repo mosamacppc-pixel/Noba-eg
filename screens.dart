@@ -44,6 +44,16 @@ void goWeb(BuildContext c, String title, String path) {
 void goCollection(BuildContext c, String handle, [String? title]) =>
     Navigator.push(c, MaterialPageRoute(builder: (_) => CollectionScreen(handle: handle, title: title)));
 void goProduct(BuildContext c, Map<String, dynamic> p) => Navigator.push(c, MaterialPageRoute(builder: (_) => ProductScreen(p: p)));
+void openLink(BuildContext c, String link) {
+  if (link.isEmpty) return;
+  final m = RegExp(r'^/collections/([^/?#]+)').firstMatch(link);
+  if (m != null) {
+    goCollection(c, m.group(1)!);
+  } else {
+    goWeb(c, 'NOBA', link);
+  }
+}
+
 void goCart(BuildContext c) => Navigator.push(c, MaterialPageRoute(builder: (_) => const CartScreen()));
 void goSearch(BuildContext c) => Navigator.push(c, MaterialPageRoute(builder: (_) => const SearchScreen()));
 
@@ -149,7 +159,9 @@ class _AnnounceBarState extends State<AnnounceBar> {
   @override
   void initState() {
     super.initState();
-    t = Timer.periodic(const Duration(seconds: 4), (_) => setState(() => i = (i + 1) % 3));
+    t = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted) setState(() => i = i + 1);
+    });
   }
 
   @override
@@ -160,19 +172,28 @@ class _AnnounceBarState extends State<AnnounceBar> {
 
   @override
   Widget build(BuildContext context) {
-    final msgs = [
-      tr(context, 'احصل الآن على شحن مجاني للطلبات الأكثر من 700 جنيه مصري', 'Get free shipping on orders over 700 EGP'),
-      tr(context, 'اهلا بكم فى نوبا لمستحضرات التجميل و العناية الشخصية', 'Welcome to NOBA Cosmetics & Personal Care'),
-      tr(context, 'تسوق الآن بـ 375 جنيه واحصل على خصم إضافي 5%', 'Shop now from 375 EGP and get an extra 5% off'),
-    ];
-    return InkWell(
-      onTap: i == 2 ? () => goCollection(context, 'green-friday') : null,
-      child: Center(
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 300),
-          child: Text(msgs[i], key: ValueKey(i), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white, fontSize: 12.5, decoration: i == 2 ? TextDecoration.underline : null, decorationColor: Colors.white)),
-        ),
-      ),
+    return ValueListenableBuilder<AppContent?>(
+      valueListenable: appContent,
+      builder: (context, ac, _) {
+        final anns = (ac != null && ac.anns.isNotEmpty)
+            ? ac.anns
+            : [
+                AppAnn('احصل الآن على شحن مجاني للطلبات الأكثر من 700 جنيه مصري', 'Get free shipping on orders over 700 EGP', ''),
+                AppAnn('اهلا بكم فى نوبا لمستحضرات التجميل و العناية الشخصية', 'Welcome to NOBA Cosmetics & Personal Care', ''),
+                AppAnn('تسوق الآن بـ 375 جنيه واحصل على خصم إضافي 5%', 'Shop now from 375 EGP and get an extra 5% off', '/collections/green-friday'),
+              ];
+        final k = i % anns.length;
+        final a = anns[k];
+        return InkWell(
+          onTap: a.link.isNotEmpty ? () => openLink(context, a.link) : null,
+          child: Center(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              child: Text(tr(context, a.ar, a.en), key: ValueKey(k), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white, fontSize: 12.5, decoration: a.link.isNotEmpty ? TextDecoration.underline : null, decorationColor: Colors.white)),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -733,10 +754,15 @@ class _SlideshowState extends State<Slideshow> {
   final pc = PageController();
   int i = 0;
   Timer? t;
+  List<AppBanner> _slides() {
+    final ac = appContent.value;
+    return (ac != null && ac.banners.isNotEmpty) ? ac.banners : [for (final u in slideUrls) AppBanner(u, '')];
+  }
+
   @override
   void initState() {
     super.initState();
-    t = Timer.periodic(const Duration(seconds: 5), (_) => _go((i + 1) % slideUrls.length));
+    t = Timer.periodic(const Duration(seconds: 5), (_) => _go((i + 1) % _slides().length));
   }
 
   void _go(int n) {
@@ -753,30 +779,37 @@ class _SlideshowState extends State<Slideshow> {
   @override
   Widget build(BuildContext context) {
     final ar = isAr(context);
-    return AspectRatio(
-      aspectRatio: 1.24,
-      child: Stack(children: [
-        PageView.builder(
-          controller: pc,
-          itemCount: slideUrls.length,
-          onPageChanged: (n) => setState(() => i = n),
-          itemBuilder: (_, n) => img(slideUrls[n], w: 1000),
-        ),
-        PositionedDirectional(start: 4, top: 0, bottom: 0, child: Center(child: _arrow(ar ? Icons.chevron_right : Icons.chevron_left, () => _go((i - 1 + slideUrls.length) % slideUrls.length)))),
-        PositionedDirectional(end: 4, top: 0, bottom: 0, child: Center(child: _arrow(ar ? Icons.chevron_left : Icons.chevron_right, () => _go((i + 1) % slideUrls.length)))),
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 8,
-          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            for (var n = 0; n < slideUrls.length; n++)
-              GestureDetector(
-                onTap: () => _go(n),
-                child: Container(margin: const EdgeInsets.all(3), width: 9, height: 9, decoration: BoxDecoration(shape: BoxShape.circle, color: n == i ? ink : Colors.white70, border: Border.all(color: Colors.white, width: .5))),
-              ),
+    return ValueListenableBuilder<AppContent?>(
+      valueListenable: appContent,
+      builder: (context, _, __) {
+        final sl = _slides();
+        if (i >= sl.length) i = 0;
+        return AspectRatio(
+          aspectRatio: 1.24,
+          child: Stack(children: [
+            PageView.builder(
+              controller: pc,
+              itemCount: sl.length,
+              onPageChanged: (n) => setState(() => i = n),
+              itemBuilder: (_, n) => GestureDetector(onTap: sl[n].link.isNotEmpty ? () => openLink(context, sl[n].link) : null, child: img(sl[n].url, w: 1000)),
+            ),
+            PositionedDirectional(start: 4, top: 0, bottom: 0, child: Center(child: _arrow(ar ? Icons.chevron_right : Icons.chevron_left, () => _go((i - 1 + sl.length) % sl.length)))),
+            PositionedDirectional(end: 4, top: 0, bottom: 0, child: Center(child: _arrow(ar ? Icons.chevron_left : Icons.chevron_right, () => _go((i + 1) % sl.length)))),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 8,
+              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                for (var n = 0; n < sl.length; n++)
+                  GestureDetector(
+                    onTap: () => _go(n),
+                    child: Container(margin: const EdgeInsets.all(3), width: 9, height: 9, decoration: BoxDecoration(shape: BoxShape.circle, color: n == i ? ink : Colors.white70, border: Border.all(color: Colors.white, width: .5))),
+                  ),
+              ]),
+            ),
           ]),
-        ),
-      ]),
+        );
+      },
     );
   }
 }

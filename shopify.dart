@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'config.dart';
 
@@ -20,6 +21,25 @@ discountCodes{code applicable}
 lines(first:50){nodes{id quantity cost{totalAmount{amount}}
  merchandise{... on ProductVariant{id title product{title} image{url}}}}}
 ''';
+
+class AppBanner {
+  final String url, link;
+  AppBanner(this.url, this.link);
+}
+
+class AppAnn {
+  final String ar, en, link;
+  AppAnn(this.ar, this.en, this.link);
+}
+
+class AppContent {
+  final List<AppBanner> banners;
+  final List<AppAnn> anns;
+  AppContent(this.banners, this.anns);
+}
+
+/// محتوى يُدار من Shopify (Metaobjects: app_banner / app_announcement)
+final appContent = ValueNotifier<AppContent?>(null);
 
 class ProdPage {
   final String title, description;
@@ -96,8 +116,37 @@ class Shopify {
     return r['cart'] as Map<String, dynamic>;
   }
 
-  static Future<Map<String, dynamic>> cartCreate(String variantId, int q) =>
-      _cartMut('cartCreate', '\$v:ID!,\$q:Int!', 'input:{lines:[{merchandiseId:\$v,quantity:\$q}]}', {'v': variantId, 'q': q});
+  static Future<Map<String, dynamic>> cartCreate(String variantId, int q) => _cartMut(
+      'cartCreate',
+      '\$v:ID!,\$q:Int!',
+      'input:{lines:[{merchandiseId:\$v,quantity:\$q}],attributes:[{key:"source",value:"app"},{key:"app_platform",value:"${defaultTargetPlatform.name}"}]}',
+      {'v': variantId, 'q': q});
+
+  static Future<void> loadContent() async {
+    try {
+      final d = await _raw('query(\$lang:LanguageCode!) @inContext(language:\$lang,country:EG){'
+          'b:metaobjects(type:"app_banner",first:20){nodes{fields{key value reference{... on MediaImage{image{url}}}}}} '
+          'a:metaobjects(type:"app_announcement",first:20){nodes{fields{key value}}}}').timeout(const Duration(seconds: 8));
+      Map<String, String> f(dynamic n) {
+        final m = <String, String>{};
+        for (final x in (n['fields'] as List)) {
+          m[x['key']] = (x['value'] ?? '').toString();
+          final u = x['reference']?['image']?['url'];
+          if (u != null) m['${x['key']}_url'] = u;
+        }
+        return m;
+      }
+
+      int so(Map<String, String> m) => int.tryParse(m['sort'] ?? '') ?? 99;
+      bool on(Map<String, String> m) => m['active'] != 'false';
+      final bs = ((d['b']['nodes'] as List).map(f).where((m) => on(m) && m['image_url'] != null).toList())..sort((a, b) => so(a).compareTo(so(b)));
+      final an = ((d['a']['nodes'] as List).map(f).where((m) => on(m) && (m['text_ar'] ?? '').isNotEmpty).toList())..sort((a, b) => so(a).compareTo(so(b)));
+      appContent.value = AppContent(
+        bs.map((m) => AppBanner(m['image_url']!, m['link'] ?? '')).toList(),
+        an.map((m) => AppAnn(m['text_ar']!, (m['text_en'] ?? '').isEmpty ? m['text_ar']! : m['text_en']!, m['link'] ?? '')).toList(),
+      );
+    } catch (_) {}
+  }
   static Future<Map<String, dynamic>> cartAdd(String cartId, String variantId, int q) =>
       _cartMut('cartLinesAdd', '\$c:ID!,\$v:ID!,\$q:Int!', 'cartId:\$c,lines:[{merchandiseId:\$v,quantity:\$q}]', {'c': cartId, 'v': variantId, 'q': q});
   static Future<Map<String, dynamic>> cartSetQty(String cartId, String lineId, int q) =>
