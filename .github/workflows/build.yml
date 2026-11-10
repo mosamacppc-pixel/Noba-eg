@@ -1,0 +1,69 @@
+name: Build NOBA APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ['README.md']
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Build
+        run: |
+          set -ex
+          if [ ! -d lib ]; then mkdir -p lib && mv ./*.dart lib/; fi
+          chmod +x ./setup.sh
+          ./setup.sh
+          mkdir -p assets
+          if [ -f icon.jpg ]; then
+            cp icon.jpg assets/src.jpg
+          else
+            curl -fsSL "https://nobaeg.com/cdn/shop/files/main_logo_2-01.png?v=1756291803&width=800" -o assets/logo.png
+            convert -size 1024x1024 xc:"#55715A" \( assets/logo.png -resize 700x700 \) -gravity center -composite assets/src.jpg
+          fi
+          (command -v convert >/dev/null 2>&1 || (sudo apt-get update -y && sudo apt-get install -y imagemagick))
+          convert assets/src.jpg -resize 1024x1024 assets/icon.png
+          convert -size 1024x1024 xc:none \( assets/src.jpg -resize 800x800 \) -gravity center -composite assets/icon_fg.png
+          cat > flutter_launcher_icons.yaml <<'YAML'
+          flutter_launcher_icons:
+            android: true
+            ios: true
+            image_path: "assets/icon.png"
+            remove_alpha_ios: true
+            adaptive_icon_background: "#55715A"
+            adaptive_icon_foreground: "assets/icon_fg.png"
+          YAML
+          flutter pub add --dev flutter_launcher_icons
+          dart run flutter_launcher_icons
+          sed -i 's/android:label="[^"]*"/android:label="NOBA"/' android/app/src/main/AndroidManifest.xml
+          flutter build apk --release --obfuscate --split-debug-info=build/symbols
+          cp build/app/outputs/flutter-apk/app-release.apk noba-app.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noba-app
+          path: noba-app.apk
+
+      - name: Publish download link (pre-release)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: NOBA app build ${{ github.run_number }}
+          prerelease: true
+          files: noba-app.apk
